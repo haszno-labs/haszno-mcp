@@ -348,7 +348,7 @@ describe('registerAccountTools', () => {
 
     it('returns an error when neither apiKey nor basicAuth is supplied', async () => {
       const result = await stub.getToolCb('haszno_account_configure')({
-        apiUrl: 'https://shop.arfutar.hu',
+        apiUrl: 'https://shop.haszno.hu',
         confirm: true,
       })
       expect(isError(result)).toBe(true)
@@ -358,7 +358,7 @@ describe('registerAccountTools', () => {
 
     it('returns an error when both apiKey and basicAuth are supplied', async () => {
       const result = await stub.getToolCb('haszno_account_configure')({
-        apiUrl: 'https://shop.arfutar.hu',
+        apiUrl: 'https://shop.haszno.hu',
         apiKey: 'k',
         basicAuth: 'u:p',
         confirm: true,

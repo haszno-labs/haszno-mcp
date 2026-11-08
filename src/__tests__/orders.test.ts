@@ -304,7 +304,7 @@ describe('registerOrdersTools()', () => {
     })
 
     it('blocks and returns error when URL is production (no demo/staging/localhost)', async () => {
-      process.env.HASZNO_API_URL = 'https://myshop.arfutar.hu'
+      process.env.HASZNO_API_URL = 'https://myshop.haszno.hu'
 
       const { text, isError } = await call(tools, 'haszno_orders_create_demo', { confirm: true })
       expect(isError).toBe(true)
