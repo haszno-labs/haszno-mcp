@@ -1,0 +1,290 @@
+/** All money values are whole forints. `costNet` is VAT-exclusive; prices are gross. */
+
+export interface MarginResult {
+  priceGross: number
+  marginNet: number
+  marginPct: number
+}
+
+export interface Settings {
+  id: 1
+  undercutPct: number
+  minMarginPct: number
+  vatPct: number
+  automationPaused: boolean
+}
+
+export interface Product {
+  id: number
+  supplierId: number
+  sku: string
+  name: string
+  costNet: number
+  stock: number
+  rrpGross: number | null
+  marketMinGross: number | null
+  marketShop: string | null
+  priceGross: number
+  listed: boolean
+  trendKeyword: string | null
+  trendKeywordEn: string | null
+  updatedAt: string
+  supplierName: string
+  current: MarginResult
+  recommended: MarginResult
+}
+
+export interface Supplier {
+  id: number
+  name: string
+  orderMode: 'simulated' | 'email'
+  email: string | null
+  network: boolean
+  category: string | null
+  country: string | null
+  description: string | null
+  shopUrl: string | null
+  createdAt: string
+}
+
+export interface OrderEvent {
+  at: string
+  text: string
+}
+
+export interface OrderItem {
+  orderId: number
+  qty: number
+  priceGross: number
+  name: string
+  sku: string
+}
+
+export interface Order {
+  id: number
+  externalId: string
+  customerName: string
+  address: string
+  status: 'received' | 'forwarded' | 'shipped' | 'error'
+  supplierOrderId: string | null
+  trackingNumber: string | null
+  totalGross: number
+  events: OrderEvent[]
+  createdAt: string
+  items: OrderItem[]
+}
+
+export interface Stats {
+  products: number
+  losing: number
+  overMarket: number
+  toFix: number
+  orders: number
+}
+
+export interface Impact {
+  days: number
+  extraProfit: number
+  baseline: number
+  pctGain: number
+  orders: number
+  autoForwardedOrders: number
+}
+
+export type RuleConditionOp = 'lt' | 'lte' | 'gt' | 'gte' | 'eq' | 'neq' | 'changed'
+
+export interface RuleCondition {
+  field: string
+  op: RuleConditionOp
+  value?: number | string | null
+}
+
+export interface RuleAction {
+  type: string
+  params?: Record<string, unknown>
+}
+
+export interface Rule {
+  id: number
+  name: string
+  enabled: boolean
+  trigger: string
+  conditions: RuleCondition[]
+  actions: RuleAction[]
+  template: string | null
+  createdAt: string
+}
+
+export interface RuleTemplate {
+  key: string
+  name: string
+  description: string
+  trigger: string
+  conditions: RuleCondition[]
+  actions: RuleAction[]
+}
+
+export interface RuleRun {
+  id: number
+  ruleId: number
+  ruleName: string | null
+  trigger: string
+  productId: number | null
+  summary: string
+  at: string
+}
+
+export type ProposalStatus = 'pending' | 'approved' | 'rejected' | 'rolled_back'
+
+export interface Proposal {
+  id: number
+  productId: number
+  productName: string | null
+  productSku: string | null
+  oldPriceGross: number
+  proposedPriceGross: number
+  reason: string
+  source: string
+  status: ProposalStatus
+  batchId: string | null
+  createdAt: string
+  decidedAt: string | null
+}
+
+export interface NetworkSupplier extends Supplier {
+  connected: boolean
+  productCount: number
+  avgResellerMarginPct: number | null
+}
+
+export interface NetworkProduct {
+  id: number
+  supplierId: number
+  sku: string
+  name: string
+  ean: string | null
+  category: string | null
+  wholesaleNet: number
+  rrpGross: number | null
+  stock: number
+  updatedAt: string
+  potentialMargin: MarginResult
+}
+
+export interface ResellerStats {
+  resellerCount: number
+  minGross: number | null
+  avgGross: number | null
+  maxGross: number | null
+  belowRrp: number
+  lossCount: number
+  saturation: number
+}
+
+export interface NetworkProductStats extends ResellerStats {
+  id: number
+  sku: string
+  name: string
+  ean: string | null
+  category: string | null
+  wholesaleNet: number
+  rrpGross: number | null
+  stock: number
+}
+
+export interface SupplierView {
+  supplier: Pick<Supplier, 'id' | 'name' | 'category' | 'country' | 'shopUrl'>
+  products: NetworkProductStats[]
+}
+
+export interface RecommendationItem {
+  id: number
+  sku: string
+  name: string
+  costNet: number
+  stock: number
+  supplierName: string
+  recommended: MarginResult
+  trendScore?: number
+}
+
+export interface Recommendations {
+  anchor: string
+  geo: string
+  items: RecommendationItem[]
+}
+
+export interface AiUsage {
+  model: string
+  inputTokens: number
+  outputTokens: number
+  /** Estimated cost in Hungarian forints (not an official invoice amount) */
+  costFt: number
+}
+
+export interface AiShortlistPick {
+  productId: number
+  networkProductId: number | null
+  name: string
+  imageUrl: string | null
+  supplierName: string
+  recommendedPriceGross: number
+  marginNet: number
+  marginPct: number
+  listed: boolean
+  fit: number
+  aiReason: string
+}
+
+export interface AiShortlistResult {
+  summary: string
+  picks: AiShortlistPick[]
+  usage: AiUsage | null
+  cached?: boolean
+}
+
+// ---- request/response helpers ----
+
+export interface FeedImportResult {
+  created: number
+  updated: number
+  total: number
+}
+
+export interface MarketImportResult {
+  matched: number
+  total: number
+}
+
+export interface ApplyPricesResult {
+  changed: number
+  total: number
+}
+
+export interface ApproveResult {
+  batchId: string | null
+  applied: number
+}
+
+export interface RollbackResult {
+  rolledBack: number
+}
+
+export interface ConnectResult {
+  status: string
+  imported: number
+  skipped: number
+}
+
+export interface SyncResult {
+  costChanges: number
+  stockOuts: number
+  total: number
+}
+
+export interface RunResult {
+  applied?: number
+  skipped?: number
+  errors?: number
+  [key: string]: unknown
+}
