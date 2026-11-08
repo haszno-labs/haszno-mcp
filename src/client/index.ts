@@ -32,6 +32,7 @@ import type {
   ImportListItem,
   ImportListAddResult,
   ImportListPushResult,
+  ConnectStorePushResult,
   StoreConnection,
   PeerInvite,
   PeerLink,
@@ -149,7 +150,10 @@ export interface HasznoClient {
   importList: {
     list(params?: { status?: string; partner?: number; q?: string }): Promise<ImportListItem[]>
     add(body: { networkProductIds: number[] }): Promise<ImportListAddResult>
-    push(body: { ids: number[]; targetConnectionId?: number }): Promise<ImportListPushResult>
+    /** With targetConnectionId → calls POST /api/connect/stores/:id/push → ConnectStorePushResult */
+    push(body: { ids: number[]; targetConnectionId: number }): Promise<ConnectStorePushResult>
+    /** Without targetConnectionId → calls POST /api/import-list/push → ImportListPushResult */
+    push(body: { ids: number[] }): Promise<ImportListPushResult>
   }
 
   connections: {
@@ -297,7 +301,17 @@ export function createClient(opts: HttpOptions = {}): HasznoClient {
         return get(`/api/import-list${suffix}`, o)
       },
       add: (body) => post('/api/import-list', body, o),
-      push: (body) => post('/api/import-list/push', body, o),
+      // Routes to the correct endpoint depending on whether a target connection is given.
+      push: ((body: { ids: number[]; targetConnectionId?: number }) => {
+        if (body.targetConnectionId != null) {
+          return post<ConnectStorePushResult>(
+            `/api/connect/stores/${body.targetConnectionId}/push`,
+            { importListIds: body.ids },
+            o,
+          )
+        }
+        return post<ImportListPushResult>('/api/import-list/push', { ids: body.ids }, o)
+      }) as HasznoClient['importList']['push'],
     },
 
     connections: {

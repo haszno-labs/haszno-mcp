@@ -10,6 +10,7 @@ import type {
   CatalogueSearchResult,
   ImportListItem,
   StoreConnection,
+  ConnectStorePushResult,
   PeerInvite,
   PeerLink,
   BlogPost,
@@ -180,7 +181,8 @@ function makeClient(overrides: Partial<HasznoClient> = {}): HasznoClient {
     importList: {
       list: vi.fn().mockResolvedValue([IMPORT_ITEM]),
       add: vi.fn().mockResolvedValue({ added: 1, skipped: 0 }),
-      push: vi.fn().mockResolvedValue({ pushed: 1, failed: 0, errors: [] }),
+      // Default: no-target path returns { pushed } only (ImportListPushResult)
+      push: vi.fn().mockResolvedValue({ pushed: 1 }),
     },
     connections: {
       list: vi.fn().mockResolvedValue([CONNECTION]),
@@ -318,8 +320,32 @@ describe('registerCatalogueTools()', () => {
       expect(data.preview).toBe(true)
     })
 
-    it('calls importList.push when confirm=true', async () => {
-      const client = makeClient()
+    it('no-target path: calls push without targetConnectionId and returns { pushed } only', async () => {
+      const client = makeClient({
+        importList: {
+          list: vi.fn(),
+          add: vi.fn(),
+          push: vi.fn().mockResolvedValue({ pushed: 2 }),
+        },
+      })
+      const { server, tools } = makeMockServer()
+      registerCatalogueTools(server, client)
+      const result = await callTool(tools, 'haszno_import_list_push', { ids: [5, 6], confirm: true })
+      expect(client.importList.push).toHaveBeenCalledWith({ ids: [5, 6] })
+      const data = parsed(result) as { pushed: number }
+      expect(data.pushed).toBe(2)
+      expect('failed' in data).toBe(false)
+    })
+
+    it('target path: calls push with targetConnectionId and returns { pushed, failed, errors }', async () => {
+      const connectResult: ConnectStorePushResult = { pushed: 1, failed: 1, errors: ['Widget Pro: out of stock'] }
+      const client = makeClient({
+        importList: {
+          list: vi.fn(),
+          add: vi.fn(),
+          push: vi.fn().mockResolvedValue(connectResult),
+        },
+      })
       const { server, tools } = makeMockServer()
       registerCatalogueTools(server, client)
       const result = await callTool(tools, 'haszno_import_list_push', {
@@ -328,8 +354,26 @@ describe('registerCatalogueTools()', () => {
         confirm: true,
       })
       expect(client.importList.push).toHaveBeenCalledWith({ ids: [5], targetConnectionId: 1 })
-      const data = parsed(result) as { pushed: number }
+      const data = parsed(result) as ConnectStorePushResult
       expect(data.pushed).toBe(1)
+      expect(data.failed).toBe(1)
+      expect(data.errors).toHaveLength(1)
+    })
+
+    it('target path: does not crash when errors is undefined (regression guard)', async () => {
+      // Guard: if the connected-store API omits errors, the tool must not throw.
+      const client = makeClient({
+        importList: {
+          list: vi.fn(),
+          add: vi.fn(),
+          push: vi.fn().mockResolvedValue({ pushed: 1, failed: 0 } as ConnectStorePushResult),
+        },
+      })
+      const { server, tools } = makeMockServer()
+      registerCatalogueTools(server, client)
+      await expect(
+        callTool(tools, 'haszno_import_list_push', { ids: [5], targetConnectionId: 1, confirm: true }),
+      ).resolves.not.toThrow()
     })
   })
 })
@@ -398,13 +442,29 @@ describe('registerPeersTools()', () => {
   })
 
   describe('haszno_peers_invite_create', () => {
-    it('calls peers.createInvite and returns invite', async () => {
+    it('returns dry-run preview when confirm=false and does NOT call API', async () => {
       const client = makeClient()
       const { server, tools } = makeMockServer()
       registerPeersTools(server, client)
       const result = await callTool(tools, 'haszno_peers_invite_create', {
         supplierId: 42,
         expiresAt: '2026-12-31T23:59:00Z',
+        confirm: false,
+      })
+      expect(client.peers.createInvite).not.toHaveBeenCalled()
+      const data = parsed(result) as { preview: boolean; supplierId: number }
+      expect(data.preview).toBe(true)
+      expect(data.supplierId).toBe(42)
+    })
+
+    it('calls peers.createInvite and returns invite when confirm=true', async () => {
+      const client = makeClient()
+      const { server, tools } = makeMockServer()
+      registerPeersTools(server, client)
+      const result = await callTool(tools, 'haszno_peers_invite_create', {
+        supplierId: 42,
+        expiresAt: '2026-12-31T23:59:00Z',
+        confirm: true,
       })
       expect(client.peers.createInvite).toHaveBeenCalledWith({
         supplierId: 42,

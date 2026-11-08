@@ -23,6 +23,8 @@ export function registerPeersTools(server: McpServer, client: HasznoClient): voi
         'Creates a one-time invite code that lets another Haszno shop become your peer partner ' +
         'for a specific supplier. The invited shop gains access to that supplier\'s catalogue. ' +
         'You must own or manage the supplier (supplierId). ' +
+        'Requires confirm=true to prevent accidental invite creation. ' +
+        'Without confirm:true returns a dry-run preview and does NOT call the API. ' +
         'Returns { code, expiresAt, supplierId } — share the code with the partner. ' +
         'Each invite is single-use and expires at the given datetime.',
       inputSchema: {
@@ -30,10 +32,26 @@ export function registerPeersTools(server: McpServer, client: HasznoClient): voi
         expiresAt: z
           .string()
           .describe('Expiry datetime in ISO-8601, e.g. "2026-12-31T23:59:00Z". Must be in the future.'),
+        confirm: z
+          .boolean()
+          .describe('Must be true to create the invite — set false for a preview/dry-run response'),
       },
       annotations: { readOnlyHint: false, destructiveHint: false, idempotentHint: false },
     },
     async (args) => {
+      if (!args.confirm) {
+        return {
+          content: [{
+            type: 'text' as const,
+            text: JSON.stringify({
+              preview: true,
+              message: `Meghívó létrehozása: szállító #${args.supplierId}, lejár: ${args.expiresAt}. Add meg confirm: true a valós futtatáshoz.`,
+              supplierId: args.supplierId,
+              expiresAt: args.expiresAt,
+            }),
+          }],
+        }
+      }
       const invite = await client.peers.createInvite({
         supplierId: args.supplierId,
         expiresAt: args.expiresAt,

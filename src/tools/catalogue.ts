@@ -165,10 +165,10 @@ export function registerCatalogueTools(server: McpServer, client: HasznoClient):
           }],
         }
       }
-      const result = await client.importList.push({
-        ids: args.ids,
-        targetConnectionId: args.targetConnectionId,
-      })
+      // Route to the correct endpoint based on whether a target connection is given.
+      const result = args.targetConnectionId != null
+        ? await client.importList.push({ ids: args.ids, targetConnectionId: args.targetConnectionId })
+        : await client.importList.push({ ids: args.ids })
       return { content: [{ type: 'text' as const, text: JSON.stringify(result) }] }
     },
   )

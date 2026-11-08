@@ -343,7 +343,13 @@ export interface ImportListAddResult {
   skipped: number
 }
 
+/** Returned by POST /api/import-list/push (no target store). */
 export interface ImportListPushResult {
+  pushed: number
+}
+
+/** Returned by POST /api/connect/stores/:id/push (target store specified). */
+export interface ConnectStorePushResult {
   pushed: number
   failed: number
   errors: string[]
