@@ -288,3 +288,140 @@ export interface RunResult {
   errors?: number
   [key: string]: unknown
 }
+
+// ---- Catalogue / Import list ------------------------------------------------
+
+export interface CatalogueItem {
+  id: number
+  name: string
+  imageUrl: string | null
+  partnerId: number
+  partnerName: string
+  partnerCountry: string | null
+  category: string | null
+  categoryKey: string | null
+  wholesaleNet: number | null
+  rrpGross: number | null
+  marginNet: number | null
+  marginPct: number | null
+  stock: number
+  example: boolean
+  inImportList: boolean
+  inShop: boolean
+}
+
+export interface CatalogueFacets {
+  partners: { id: number; name: string; count: number }[]
+  countries: { country: string; count: number }[]
+  categories: { key: string | null; label: string | null; count: number }[]
+  marginBuckets: { label: string; min: number; max: number | null; count: number }[]
+}
+
+export interface CatalogueSearchResult {
+  items: CatalogueItem[]
+  total: number
+  facets: CatalogueFacets
+}
+
+export interface ImportListItem {
+  id: number
+  networkProductId: number
+  name: string
+  sku: string
+  partnerName: string
+  wholesaleNet: number | null
+  rrpGross: number | null
+  stock: number
+  pushStatus: 'varakozik' | 'kuldve' | 'kesz' | 'hiba'
+  targetConnectionId: number | null
+  targetExternalId: string | null
+  addedAt: string
+}
+
+export interface ImportListAddResult {
+  added: number
+  skipped: number
+}
+
+/** Returned by POST /api/import-list/push (no target store). */
+export interface ImportListPushResult {
+  pushed: number
+}
+
+/** Returned by POST /api/connect/stores/:id/push (target store specified). */
+export interface ConnectStorePushResult {
+  pushed: number
+  failed: number
+  errors: string[]
+}
+
+// ---- Store connections -------------------------------------------------------
+
+export interface StoreConnection {
+  id: number
+  platform: string
+  name: string
+  status: 'uj' | 'domain_ok' | 'kapcsolva' | 'hiba'
+  domain: string | null
+  lastError: string | null
+  connectedAt: string | null
+  config: Record<string, unknown>
+  lastSyncAt: string | null
+  createdAt: string
+}
+
+// ---- Peers / P2P ------------------------------------------------------------
+
+export interface PeerInvite {
+  id: number
+  code: string
+  createdBy: string
+  supplierId: number
+  expiresAt: string
+  acceptedBy: string | null
+  acceptedAt: string | null
+  revokedAt: string | null
+  createdAt: string
+}
+
+export interface PeerLink {
+  id: number
+  supplierId: number
+  partner: string
+  createdAt: string
+}
+
+// ---- Blog -------------------------------------------------------------------
+
+export type BlogPostStatus = 'piszkozat' | 'publikalt'
+export type BlogPeriod = 'het' | 'honap'
+
+export interface BlogPostData {
+  rankedCategories?: Array<{ category: string; score: number }>
+  rankedProducts?: Array<{ name: string; score: number }>
+  shopsCount?: number
+}
+
+export interface BlogPost {
+  id: number
+  slug: string
+  period: BlogPeriod
+  periodStart: string
+  periodEnd: string
+  title: string
+  summary: string
+  bodyMd: string
+  data: BlogPostData
+  ogTitle: string | null
+  publishedAt: string | null
+  status: BlogPostStatus
+  createdAt: string
+  updatedAt: string
+}
+
+export interface BlogListResult {
+  posts: BlogPost[]
+  total: number
+  page: number
+  perPage: number
+}
