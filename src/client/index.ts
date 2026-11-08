@@ -28,6 +28,16 @@ import type {
   MarketImportResult,
   ApplyPricesResult,
   ApproveResult,
+  CatalogueSearchResult,
+  ImportListItem,
+  ImportListAddResult,
+  ImportListPushResult,
+  StoreConnection,
+  PeerInvite,
+  PeerLink,
+  BlogPost,
+  BlogListResult,
+  BlogPeriod,
   RollbackResult,
   ConnectResult,
   SyncResult,
@@ -117,6 +127,49 @@ export interface HasznoClient {
     disconnect(id: number): Promise<{ status: string }>
     sync(id: number): Promise<SyncResult>
     getSupplierView(supplierId: number): Promise<SupplierView>
+  }
+
+  catalogue: {
+    search(params: {
+      q?: string
+      cats?: string
+      partner?: number
+      minMarginPct?: number
+      maxPrice?: number
+      minPrice?: number
+      inStock?: boolean
+      hasImage?: boolean
+      country?: string
+      sort?: 'margin_desc' | 'price_asc' | 'price_desc' | 'name_asc'
+      page?: number
+      pageSize?: number
+    }): Promise<CatalogueSearchResult>
+  }
+
+  importList: {
+    list(params?: { status?: string; partner?: number; q?: string }): Promise<ImportListItem[]>
+    add(body: { networkProductIds: number[] }): Promise<ImportListAddResult>
+    push(body: { ids: number[]; targetConnectionId?: number }): Promise<ImportListPushResult>
+  }
+
+  connections: {
+    list(): Promise<StoreConnection[]>
+    get(id: number): Promise<StoreConnection>
+  }
+
+  peers: {
+    createInvite(body: { supplierId: number; expiresAt: string }): Promise<PeerInvite>
+    listInvites(): Promise<PeerInvite[]>
+    revokeInvite(code: string): Promise<{ revoked: boolean }>
+    acceptInvite(code: string, body: { acceptorId: string }): Promise<PeerLink>
+    listLinks(): Promise<PeerLink[]>
+    removeLink(id: number): Promise<{ removed: boolean }>
+    setVisibility(id: number, body: { visibility: 'private' | 'public' }): Promise<{ id: number; visibility: string }>
+  }
+
+  blog: {
+    list(params?: { period?: BlogPeriod; page?: number; perPage?: number }): Promise<BlogListResult>
+    get(slug: string): Promise<BlogPost>
   }
 }
 
@@ -212,6 +265,66 @@ export function createClient(opts: HttpOptions = {}): HasznoClient {
       disconnect: (id) => post(`/api/network/suppliers/${id}/disconnect`, null, o),
       sync: (id) => post(`/api/network/suppliers/${id}/sync`, null, o),
       getSupplierView: (supplierId) => get(`/api/network/supplier-view/${supplierId}`, o),
+    },
+
+    catalogue: {
+      search: (params) => {
+        const qs = new URLSearchParams()
+        if (params.q) qs.set('q', params.q)
+        if (params.cats) qs.set('cats', params.cats)
+        if (params.partner != null) qs.set('partner', String(params.partner))
+        if (params.minMarginPct != null) qs.set('minMarginPct', String(params.minMarginPct))
+        if (params.maxPrice != null) qs.set('maxPrice', String(params.maxPrice))
+        if (params.minPrice != null) qs.set('minPrice', String(params.minPrice))
+        if (params.inStock) qs.set('inStock', '1')
+        if (params.hasImage) qs.set('hasImage', '1')
+        if (params.country) qs.set('country', params.country)
+        if (params.sort) qs.set('sort', params.sort)
+        if (params.page != null) qs.set('page', String(params.page))
+        if (params.pageSize != null) qs.set('pageSize', String(params.pageSize))
+        const suffix = qs.toString() ? `?${qs.toString()}` : ''
+        return get(`/api/catalogue/products${suffix}`, o)
+      },
+    },
+
+    importList: {
+      list: (params) => {
+        const qs = new URLSearchParams()
+        if (params?.status) qs.set('status', params.status)
+        if (params?.partner != null) qs.set('partner', String(params.partner))
+        if (params?.q) qs.set('q', params.q)
+        const suffix = qs.toString() ? `?${qs.toString()}` : ''
+        return get(`/api/import-list${suffix}`, o)
+      },
+      add: (body) => post('/api/import-list', body, o),
+      push: (body) => post('/api/import-list/push', body, o),
+    },
+
+    connections: {
+      list: () => get('/api/connect/stores', o),
+      get: (id) => get(`/api/connect/stores/${id}`, o),
+    },
+
+    peers: {
+      createInvite: (body) => post('/api/peers/invites', body, o),
+      listInvites: () => get('/api/peers/invites', o),
+      revokeInvite: (code) => del(`/api/peers/invites/${code}`, o),
+      acceptInvite: (code, body) => post(`/api/peers/invites/${code}/accept`, body, o),
+      listLinks: () => get('/api/peers/links', o),
+      removeLink: (id) => del(`/api/peers/links/${id}`, o),
+      setVisibility: (id, body) => put(`/api/peers/suppliers/${id}/visibility`, body, o),
+    },
+
+    blog: {
+      list: (params) => {
+        const qs = new URLSearchParams()
+        if (params?.period) qs.set('period', params.period)
+        if (params?.page != null) qs.set('page', String(params.page))
+        if (params?.perPage != null) qs.set('perPage', String(params.perPage))
+        const suffix = qs.toString() ? `?${qs.toString()}` : ''
+        return get(`/api/blog${suffix}`, o)
+      },
+      get: (slug) => get(`/api/blog/${slug}`, o),
     },
   }
 }

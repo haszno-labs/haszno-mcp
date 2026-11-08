@@ -28,6 +28,10 @@ import { registerOrdersTools } from './tools/orders.js'
 import { registerIdeasTools } from './tools/ideas.js'
 import { registerFeedsTools } from './tools/feeds.js'
 import { registerAccountTools } from './tools/account.js'
+import { registerCatalogueTools } from './tools/catalogue.js'
+import { registerConnectionsTools } from './tools/connections.js'
+import { registerPeersTools } from './tools/peers.js'
+import { registerBlogTools } from './tools/blog.js'
 
 /** Read flat config from ~/.config/haszno/config.json with ~/.config/arfutar fallback. */
 function readHasznoConfig(): { apiUrl?: string; apiKey?: string; basicAuth?: string } {
@@ -84,6 +88,10 @@ async function main() {
   registerIdeasTools(server, client)
   registerFeedsTools(server, client)
   registerAccountTools(server, client)
+  registerCatalogueTools(server, client)
+  registerConnectionsTools(server, client)
+  registerPeersTools(server, client)
+  registerBlogTools(server, client)
 
   const transport = new StdioServerTransport()
   await server.connect(transport)
