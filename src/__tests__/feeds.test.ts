@@ -154,7 +154,7 @@ describe('getBaseUrl()', () => {
   })
 
   it('returns default URL when env is not set', () => {
-    expect(getBaseUrl()).toBe('https://demo.haszno.hu')
+    expect(getBaseUrl()).toBe('https://api.haszno.hu')
   })
 
   it('strips trailing slash', () => {

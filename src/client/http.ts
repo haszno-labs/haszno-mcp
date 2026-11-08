@@ -47,7 +47,7 @@ export async function request<T>(
     opts.baseUrl ??
     process.env['HASZNO_API_URL'] ??
     process.env['ARFUTAR_API_URL'] ??
-    'https://demo.haszno.hu'
+    'https://api.haszno.hu'
   ).replace(/\/$/, '')
   const url = `${baseUrl}${path}`
   const fetchFn = opts.fetch ?? fetch

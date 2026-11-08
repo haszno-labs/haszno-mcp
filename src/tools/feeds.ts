@@ -53,7 +53,7 @@ export function getBaseUrl(): string {
   return (
     process.env['HASZNO_API_URL'] ??
     process.env['ARFUTAR_API_URL'] ??
-    'https://demo.haszno.hu'
+    'https://api.haszno.hu'
   ).replace(/\/$/, '')
 }
 

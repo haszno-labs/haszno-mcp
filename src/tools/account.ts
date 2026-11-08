@@ -258,7 +258,7 @@ export function registerAccountTools(server: McpServer, client: HasznoClient): v
           written['basicAuth'] = args.basicAuth
         }
 
-        fs.mkdirSync(configDir, { recursive: true })
+        fs.mkdirSync(configDir, { recursive: true, mode: 0o700 })
         fs.writeFileSync(configFile, JSON.stringify(written, null, 2), { mode: 0o600 })
 
         return json({
