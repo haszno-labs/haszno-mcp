@@ -302,7 +302,7 @@ describe('registerAccountTools', () => {
 
     it('writes config.json with apiKey (Bearer mode) in flat format', async () => {
       const result = await stub.getToolCb('haszno_account_configure')({
-        apiUrl: 'https://shop.haszno.hu',
+        apiUrl: 'https://shop.haszno.com',
         apiKey: 'secret-key',
         confirm: true,
       })
@@ -314,14 +314,14 @@ describe('registerAccountTools', () => {
 
       expect(fsState.writtenContent).not.toBeNull()
       const written = JSON.parse(fsState.writtenContent!) as Record<string, string>
-      expect(written['apiUrl']).toBe('https://shop.haszno.hu')
+      expect(written['apiUrl']).toBe('https://shop.haszno.com')
       expect(written['apiKey']).toBe('secret-key')
       expect(written['basicAuth']).toBeUndefined()
     })
 
     it('writes config.json with basicAuth fallback in flat format', async () => {
       const result = await stub.getToolCb('haszno_account_configure')({
-        apiUrl: 'https://shop.haszno.hu',
+        apiUrl: 'https://shop.haszno.com',
         basicAuth: 'user:pass',
         confirm: true,
       })
@@ -333,22 +333,22 @@ describe('registerAccountTools', () => {
 
     it('merges with existing flat config, preserving existing keys', async () => {
       fsState.existingContent = JSON.stringify({
-        apiUrl: 'https://old.haszno.hu',
+        apiUrl: 'https://old.haszno.com',
         apiKey: 'old-key',
       })
       await stub.getToolCb('haszno_account_configure')({
-        apiUrl: 'https://new.haszno.hu',
+        apiUrl: 'https://new.haszno.com',
         apiKey: 'new-key',
         confirm: true,
       })
       const written = JSON.parse(fsState.writtenContent!) as Record<string, string>
-      expect(written['apiUrl']).toBe('https://new.haszno.hu')
+      expect(written['apiUrl']).toBe('https://new.haszno.com')
       expect(written['apiKey']).toBe('new-key')
     })
 
     it('returns an error when neither apiKey nor basicAuth is supplied', async () => {
       const result = await stub.getToolCb('haszno_account_configure')({
-        apiUrl: 'https://shop.haszno.hu',
+        apiUrl: 'https://shop.haszno.com',
         confirm: true,
       })
       expect(isError(result)).toBe(true)
@@ -358,7 +358,7 @@ describe('registerAccountTools', () => {
 
     it('returns an error when both apiKey and basicAuth are supplied', async () => {
       const result = await stub.getToolCb('haszno_account_configure')({
-        apiUrl: 'https://shop.haszno.hu',
+        apiUrl: 'https://shop.haszno.com',
         apiKey: 'k',
         basicAuth: 'u:p',
         confirm: true,

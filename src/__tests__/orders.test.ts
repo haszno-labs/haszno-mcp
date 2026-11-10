@@ -285,7 +285,7 @@ describe('registerOrdersTools()', () => {
     })
 
     it('calls createDemo and returns id when in demo env (URL contains "demo")', async () => {
-      process.env.HASZNO_API_URL = 'https://demo.haszno.hu'
+      process.env.HASZNO_API_URL = 'https://demo.haszno.com'
       client.orders.createDemo.mockResolvedValue({ id: 99 })
 
       const { text, isError } = await call(tools, 'haszno_orders_create_demo', { confirm: true })
@@ -304,7 +304,7 @@ describe('registerOrdersTools()', () => {
     })
 
     it('blocks and returns error when URL is production (no demo/staging/localhost)', async () => {
-      process.env.HASZNO_API_URL = 'https://myshop.haszno.hu'
+      process.env.HASZNO_API_URL = 'https://myshop.haszno.com'
 
       const { text, isError } = await call(tools, 'haszno_orders_create_demo', { confirm: true })
       expect(isError).toBe(true)
