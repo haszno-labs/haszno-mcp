@@ -1,6 +1,6 @@
 /**
  * Low-level fetch wrapper — the ONLY place HTTP calls happen in the client.
- * - Auth from env: HASZNO_API_KEY → Bearer (fallback: ARFUTAR_API_KEY).
+ * - Auth from env: HASZNO_API_KEY → x-api-key header (fallback: ARFUTAR_API_KEY).
  * - Never logs or exposes credentials.
  * - Retries 5xx and 429 with exponential back-off (max 3 attempts).
  */
@@ -23,7 +23,7 @@ export interface HttpOptions {
 function buildAuthHeader(opts: HttpOptions): Record<string, string> {
   // Never print credentials
   const key = opts.apiKey ?? process.env['HASZNO_API_KEY'] ?? process.env['ARFUTAR_API_KEY']
-  if (key) return { Authorization: `Bearer ${key}` }
+  if (key) return { 'x-api-key': key }
 
   const basic = opts.basicAuth ?? process.env['HASZNO_BASIC'] ?? process.env['ARFUTAR_BASIC']
   if (basic) {
@@ -47,7 +47,7 @@ export async function request<T>(
     opts.baseUrl ??
     process.env['HASZNO_API_URL'] ??
     process.env['ARFUTAR_API_URL'] ??
-    'https://api.haszno.hu'
+    'https://haszno.com'
   ).replace(/\/$/, '')
   const url = `${baseUrl}${path}`
   const fetchFn = opts.fetch ?? fetch

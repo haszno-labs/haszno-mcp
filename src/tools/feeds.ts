@@ -39,7 +39,7 @@ export function resolveContent(content: string | undefined, filePath: string | u
 /** Build auth headers matching the client's logic. Never logs credentials. */
 export function buildAuthHeaders(): Record<string, string> {
   const key = process.env['HASZNO_API_KEY'] ?? process.env['ARFUTAR_API_KEY']
-  if (key) return { Authorization: `Bearer ${key}` }
+  if (key) return { 'x-api-key': key }
   const basic = process.env['HASZNO_BASIC'] ?? process.env['ARFUTAR_BASIC']
   if (basic) {
     const encoded = Buffer.from(basic).toString('base64')
@@ -53,7 +53,7 @@ export function getBaseUrl(): string {
   return (
     process.env['HASZNO_API_URL'] ??
     process.env['ARFUTAR_API_URL'] ??
-    'https://api.haszno.hu'
+    'https://haszno.com'
   ).replace(/\/$/, '')
 }
 

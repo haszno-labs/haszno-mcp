@@ -27,7 +27,7 @@ curl -fsSL https://raw.githubusercontent.com/haszno-labs/haszno-skill/main/insta
 ### npx (nyilvánossá tétel után — nem kell klónolni)
 
 ```bash
-claude mcp add haszno -- npx -y @haszno/mcp
+claude mcp add haszno -- npx -y github:haszno-labs/haszno-mcp
 ```
 
 ### Helyi telepítés (jelenleg)
@@ -60,7 +60,7 @@ A konfigurációs fájl formátuma (lapos, nem profil-keyed):
 
 ```json
 {
-  "apiUrl": "https://en-bolt.haszno.hu",
+  "apiUrl": "https://haszno.com",
   "apiKey": "haszno_xxxx"
 }
 ```
@@ -68,7 +68,7 @@ A konfigurációs fájl formátuma (lapos, nem profil-keyed):
 Ugyanezt az MCP szerveren keresztül is be lehet állítani:
 
 ```
-haszno_account_configure(apiUrl: "https://en-bolt.haszno.hu", apiKey: "haszno_xxxx", confirm: true)
+haszno_account_configure(apiUrl: "https://haszno.com", apiKey: "haszno_xxxx", confirm: true)
 ```
 
 ---
@@ -144,4 +144,4 @@ MIT — Copyright (c) 2026 Haszno Labs
 
 ---
 
-*English summary: This is the MCP (Model Context Protocol) server for the Haszno pricing platform. It runs on stdio transport and exposes ~35 tools for managing products, price proposals, automation rules, orders, supplier catalog, and product ideas. Install via `claude mcp add haszno -- npx -y @haszno/mcp` (once public) or locally from this repo.*
+*English summary: This is the MCP (Model Context Protocol) server for the Haszno pricing platform. It runs on stdio transport and exposes ~35 tools for managing products, price proposals, automation rules, orders, supplier catalog, and product ideas. Install via `claude mcp add haszno -- npx -y github:haszno-labs/haszno-mcp` or locally from this repo.*
