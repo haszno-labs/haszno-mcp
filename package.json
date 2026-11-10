@@ -30,8 +30,7 @@
     "build": "tsup",
     "dev": "tsup --watch",
     "typecheck": "tsc --noEmit",
-    "test": "vitest run --passWithNoTests",
-    "prepare": "tsup"
+    "test": "vitest run --passWithNoTests"
   },
   "dependencies": {
     "@modelcontextprotocol/sdk": "^1.12.0",
