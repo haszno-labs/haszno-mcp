@@ -37,7 +37,7 @@ function compactOrder(o: Order) {
 
 /** Returns true when the base URL looks like a demo/staging environment. */
 function isDemoEnv(): boolean {
-  const url = process.env['HASZNO_API_URL'] ?? process.env['ARFUTAR_API_URL'] ?? 'https://api.haszno.hu'
+  const url = process.env['HASZNO_API_URL'] ?? process.env['ARFUTAR_API_URL'] ?? 'https://haszno.com'
   return url.includes('demo') || url.includes('staging') || url.includes('localhost')
 }
 

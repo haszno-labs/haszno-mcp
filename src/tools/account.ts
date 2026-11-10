@@ -206,17 +206,17 @@ export function registerAccountTools(server: McpServer, client: HasznoClient): v
       description:
         'Writes Haszno API credentials to ~/.config/haszno/config.json (chmod 600) so the CLI and MCP server ' +
         'can read them without requiring environment variables on every invocation. ' +
-        'Provide "apiUrl" (e.g. https://my-shop.haszno.hu) and either "apiKey" (Bearer token) or ' +
+        'Provide "apiUrl" (default https://haszno.com) and either "apiKey" (sent as the x-api-key header) or ' +
         '"basicAuth" ("user:pass" for HTTP Basic — only used while per-shop API keys are unavailable). ' +
         'The file is created with restricted permissions (owner read/write only) and credentials are NEVER logged. ' +
         'Requires confirm: true. ' +
         'WARNING: overwrites any previously saved credentials.',
       inputSchema: {
         apiUrl: z.string().url().describe(
-          'Base URL of the Haszno API, e.g. https://my-shop.haszno.hu',
+          'Base URL of the Haszno API, default https://haszno.com',
         ),
         apiKey: z.string().min(1).optional().describe(
-          'Bearer API key (preferred). Provide this OR basicAuth, not both.',
+          'API key, sent as the x-api-key header (preferred). Provide this OR basicAuth, not both.',
         ),
         basicAuth: z.string().regex(/^[^:]+:[^:]+$/).optional().describe(
           'HTTP Basic credentials in "user:pass" format. Fallback when API keys are not yet available.',

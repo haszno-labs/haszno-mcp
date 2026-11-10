@@ -121,10 +121,10 @@ describe('buildAuthHeaders()', () => {
     expect(buildAuthHeaders()).toEqual({})
   })
 
-  it('returns Bearer header when HASZNO_API_KEY is set', () => {
+  it('returns x-api-key header when HASZNO_API_KEY is set', () => {
     process.env['HASZNO_API_KEY'] = 'test-key'
     const headers = buildAuthHeaders()
-    expect(headers['Authorization']).toBe('Bearer test-key')
+    expect(headers['x-api-key']).toBe('test-key')
   })
 
   it('returns Basic header when HASZNO_BASIC is set', () => {
@@ -133,11 +133,11 @@ describe('buildAuthHeaders()', () => {
     expect(headers['Authorization']).toMatch(/^Basic /)
   })
 
-  it('prefers Bearer over Basic when both are set', () => {
+  it('prefers the API key over Basic when both are set', () => {
     process.env['HASZNO_API_KEY'] = 'key'
     process.env['HASZNO_BASIC'] = 'user:pass'
     const headers = buildAuthHeaders()
-    expect(headers['Authorization']).toBe('Bearer key')
+    expect(headers).toEqual({ 'x-api-key': 'key' })
   })
 })
 
@@ -154,7 +154,7 @@ describe('getBaseUrl()', () => {
   })
 
   it('returns default URL when env is not set', () => {
-    expect(getBaseUrl()).toBe('https://api.haszno.hu')
+    expect(getBaseUrl()).toBe('https://haszno.com')
   })
 
   it('strips trailing slash', () => {

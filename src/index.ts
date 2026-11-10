@@ -2,7 +2,7 @@
  * @haszno/mcp — Haszno MCP server (stdio transport).
  *
  * Usage (Claude Code CLI):
- *   claude mcp add haszno -- npx -y @haszno/mcp
+ *   claude mcp add haszno -- npx -y github:haszno-labs/haszno-mcp
  *
  * Local path variant (after npm install -g):
  *   claude mcp add haszno -- node ~/.haszno/haszno-mcp/dist/index.js
