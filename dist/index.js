@@ -19,8 +19,9 @@ var HasznoApiError = class extends Error {
 
 // src/client/http.ts
 function buildAuthHeader(opts) {
-  const key = opts.apiKey ?? process.env["HASZNO_API_KEY"] ?? process.env["ARFUTAR_API_KEY"];
-  if (key) return { "x-api-key": key };
+  const bearerToken = opts.apiKey ?? process.env["HASZNO_API_TOKEN"] ?? process.env["HASZNO_API_KEY"] ?? // silent migration alias
+  process.env["ARFUTAR_API_KEY"];
+  if (bearerToken) return { Authorization: `Bearer ${bearerToken}` };
   const basic = opts.basicAuth ?? process.env["HASZNO_BASIC"] ?? process.env["ARFUTAR_BASIC"];
   if (basic) {
     const encoded = Buffer.from(basic).toString("base64");
@@ -57,8 +58,8 @@ async function request(method, path3, body, opts) {
         body: body !== void 0 ? JSON.stringify(body) : void 0,
         signal: controller.signal
       });
-    } catch (err2) {
-      lastError = err2;
+    } catch (err3) {
+      lastError = err3;
       continue;
     } finally {
       clearTimeout(timer);
@@ -245,6 +246,12 @@ function createClient(opts = {}) {
         return get(`/api/blog${suffix}`, o);
       },
       get: (slug) => get(`/api/blog/${slug}`, o)
+    },
+    agent: {
+      products: () => get("/api/agent/products", o),
+      orders: () => get("/api/agent/orders", o),
+      proposals: () => get("/api/agent/proposals", o),
+      createProposal: (body) => post("/api/agent/proposals", body, o)
     }
   };
 }
@@ -458,310 +465,374 @@ function registerCatalogTools(server, client) {
 }
 
 // src/tools/products.ts
-function registerProductsTools(_server, _client) {
-}
-
-// src/tools/proposals.ts
 import { z as z2 } from "zod";
+var NOT_AVAILABLE = "Not available with a shop API token. This operation requires a session token (web login). Use the Haszno web dashboard to perform this action.";
 function ok(data) {
   return { content: [{ type: "text", text: JSON.stringify(data, null, 2) }] };
 }
 function err(msg) {
   return { isError: true, content: [{ type: "text", text: msg }] };
 }
-function requireConfirm(confirm) {
-  if (!confirm) {
-    return err(
-      "Safety gate: this tool modifies data. Re-call with confirm: true to proceed. Read the tool description and verify the input before confirming."
-    );
-  }
-  return null;
+function fmtMargin(p) {
+  return `${p.marginPct.toFixed(1)}% (${p.marginNet} Ft net)`;
+}
+function registerProductsTools(server, client) {
+  server.tool(
+    "haszno_products_list",
+    `List products in your Haszno shop with current and recommended pricing.
+
+Returns AgentProduct rows \u2014 fields available: id, sku, name, listed, priceGross,
+stock, supplierName, current (priceGross, marginNet, marginPct),
+recommended (priceGross, marginNet, marginPct).
+
+Fields intentionally not returned by shop tokens: costNet, marketMinGross,
+marketShop, rrpGross \u2014 these are excluded from the agent endpoint.
+
+Use the returned data to:
+  \u2022 Monitor margin health (current.marginPct)
+  \u2022 Spot products where recommended price differs from current price
+  \u2022 Find unlisted products (listed: false)
+  \u2022 Filter by supplier name
+
+Money values are in whole forints (HUF), gross (VAT-inclusive).`,
+    {
+      listed: z2.boolean().optional().describe("Filter by listing status. true = only listed, false = only unlisted. Omit for all."),
+      minMarginPct: z2.number().optional().describe("Minimum current margin percentage (inclusive). Filter out products below this."),
+      supplierContains: z2.string().optional().describe("Case-insensitive substring match on supplierName."),
+      limit: z2.number().int().min(1).max(500).default(100).describe("Maximum rows to return (1\u2013500, default 100).")
+    },
+    { readOnlyHint: true },
+    async (args) => {
+      let products;
+      try {
+        products = await client.agent.products();
+      } catch (e) {
+        if (e instanceof HasznoApiError) {
+          return err(`API error fetching products: ${e.message} (HTTP ${e.status})`);
+        }
+        return err(`Unexpected error: ${String(e)}`);
+      }
+      if (args.listed !== void 0) {
+        products = products.filter((p) => p.listed === args.listed);
+      }
+      if (args.minMarginPct !== void 0) {
+        products = products.filter((p) => p.current.marginPct >= args.minMarginPct);
+      }
+      if (args.supplierContains) {
+        const q = args.supplierContains.toLowerCase();
+        products = products.filter((p) => p.supplierName.toLowerCase().includes(q));
+      }
+      const page = products.slice(0, args.limit);
+      return ok({
+        _meta: {
+          total: products.length,
+          showing: page.length
+        },
+        products: page.map((p) => ({
+          id: p.id,
+          sku: p.sku,
+          name: p.name,
+          listed: p.listed,
+          priceGross: p.priceGross,
+          stock: p.stock,
+          supplierName: p.supplierName,
+          currentMargin: fmtMargin(p.current),
+          recommendedPrice: p.recommended.priceGross,
+          recommendedMargin: fmtMargin(p.recommended),
+          priceDiff: p.recommended.priceGross - p.priceGross
+        }))
+      });
+    }
+  );
+  server.tool(
+    "haszno_products_update",
+    "Update product market price data or listing price. NOT AVAILABLE with a shop API token \u2014 requires a session token.",
+    {
+      id: z2.number().int().positive().describe("Product ID."),
+      marketMin: z2.number().optional().describe("New market minimum gross price (HUF)."),
+      price: z2.number().optional().describe("New listing gross price (HUF).")
+    },
+    { readOnlyHint: false },
+    async (_args) => err(NOT_AVAILABLE)
+  );
+  server.tool(
+    "haszno_products_set_listing",
+    "List or unlist a product. NOT AVAILABLE with a shop API token \u2014 requires a session token.",
+    {
+      id: z2.number().int().positive().describe("Product ID."),
+      listed: z2.boolean().describe("true = list the product, false = unlist.")
+    },
+    { readOnlyHint: false },
+    async (_args) => err(NOT_AVAILABLE)
+  );
+  server.tool(
+    "haszno_products_apply_prices",
+    "Apply AI-recommended prices to products. NOT AVAILABLE with a shop API token \u2014 requires a session token.",
+    {
+      ids: z2.array(z2.number().int().positive()).optional().describe("Product IDs to update. Omit for all.")
+    },
+    { readOnlyHint: false },
+    async (_args) => err(NOT_AVAILABLE)
+  );
+  server.tool(
+    "haszno_products_ai_description",
+    "Generate an AI product description. NOT AVAILABLE with a shop API token \u2014 requires a session token.",
+    {
+      id: z2.number().int().positive().describe("Product ID.")
+    },
+    { readOnlyHint: false },
+    async (_args) => err(NOT_AVAILABLE)
+  );
+}
+
+// src/tools/proposals.ts
+import { z as z3 } from "zod";
+import { randomUUID } from "crypto";
+var NOT_AVAILABLE2 = "Not available with a shop API token. Approve, reject, and rollback operations require human review through the Haszno web dashboard. This is by design: shop tokens can only CREATE proposals (pending), not apply them. Human-in-the-loop approval is mandatory.";
+function ok2(data) {
+  return { content: [{ type: "text", text: JSON.stringify(data, null, 2) }] };
+}
+function err2(msg) {
+  return { isError: true, content: [{ type: "text", text: msg }] };
 }
 function handleApiError(e, action) {
   if (e instanceof HasznoApiError) {
-    return err(`API error during ${action}: ${e.message} (status ${e.status})`);
+    switch (e.status) {
+      case 401:
+        return err2(
+          `${action}: Invalid, expired, or revoked shop API token. Generate a new token at Haszno \u2192 Integr\xE1ci\xF3 \u2192 API-kulcsok.`
+        );
+      case 403:
+        return err2(
+          `${action}: The shop token does not have permission for this operation. Check the token scope at Haszno \u2192 Integr\xE1ci\xF3 \u2192 API-kulcsok.`
+        );
+      case 404:
+        return err2(
+          `${action}: Product not found in your shop. The productId must be a product listed in your shop (GET /api/agent/products).`
+        );
+      case 409:
+        return err2(
+          `${action}: Duplicate proposal detected (replayed nonce). A proposal with this nonce already exists. Each call generates a fresh nonce automatically; this error usually means the same call was retried after success.`
+        );
+      case 429:
+        return err2(
+          `${action}: Too many failed attempts. Wait a few minutes before retrying.`
+        );
+      default:
+        return err2(`${action}: API error \u2014 ${e.message} (HTTP ${e.status})`);
+    }
   }
-  return err(`Unexpected error during ${action}: ${String(e)}`);
+  return err2(`${action}: Unexpected error \u2014 ${String(e)}`);
 }
 function registerProposalsTools(server, client) {
   server.tool(
     "haszno_proposals_list",
-    `List price-change proposals generated by Haszno rules.
+    `List PENDING price-change proposals for your shop via the agent endpoint.
 
 A "proposal" is a recommended price change that the shop owner must review
-before it takes effect.  Each proposal has:
+in the Haszno web dashboard before it takes effect. Shop tokens can read and
+create proposals (pending only); approve/reject/rollback require a session token.
+
+Each proposal has:
   \u2022 oldPriceGross / proposedPriceGross \u2014 current and suggested prices (HUF gross)
-  \u2022 reason \u2014 why the change was suggested (e.g. "market undercut detected")
-  \u2022 source \u2014 which rule or trigger created it
-  \u2022 status \u2014 pending | approved | rejected | rolled_back
-  \u2022 batchId \u2014 groups proposals applied together (use for rollback)
+  \u2022 reason \u2014 why the change was suggested
+  \u2022 status \u2014 always "pending" from the agent endpoint
+  \u2022 createdAt \u2014 when the proposal was created
 
-Use this tool to review pending proposals before calling approve/reject,
-or to audit previously approved/rejected ones.
+Fields NOT available via shop token: source, batchId, decidedAt.
 
-Returns up to \`limit\` proposals (default 25, max 100) starting at \`offset\`.
-Includes a \`_meta\` field with total count hint and pagination cursor.`,
-    {
-      status: z2.enum(["pending", "approved", "rejected", "rolled_back"]).optional().describe(
-        'Filter by status. Omit to return all statuses. "pending" is the most useful \u2014 these need a decision.'
-      ),
-      productId: z2.number().int().positive().optional().describe("Narrow to a single product ID."),
-      limit: z2.number().int().min(1).max(100).default(25).describe("Maximum number of proposals to return (1\u2013100, default 25)."),
-      offset: z2.number().int().min(0).default(0).describe("Skip this many proposals (for pagination). Default 0.")
-    },
+Returns all pending proposals (no pagination \u2014 the endpoint returns pending only).`,
+    {},
     { readOnlyHint: true },
-    async (args) => {
+    async (_args) => {
+      let proposals;
       try {
-        const all = await client.proposals.list(
-          args.status ? { status: args.status } : void 0
-        );
-        const filtered = args.productId != null ? all.filter((p) => p.productId === args.productId) : all;
-        const page = filtered.slice(args.offset, args.offset + args.limit);
-        return ok({
-          _meta: {
-            total: filtered.length,
-            offset: args.offset,
-            limit: args.limit,
-            hasMore: args.offset + args.limit < filtered.length
-          },
-          proposals: page.map((p) => ({
-            id: p.id,
-            productId: p.productId,
-            productName: p.productName,
-            productSku: p.productSku,
-            oldPriceGross: p.oldPriceGross,
-            proposedPriceGross: p.proposedPriceGross,
-            diffGross: p.proposedPriceGross - p.oldPriceGross,
-            reason: p.reason,
-            source: p.source,
-            status: p.status,
-            batchId: p.batchId,
-            createdAt: p.createdAt,
-            decidedAt: p.decidedAt
-          }))
-        });
+        proposals = await client.agent.proposals();
       } catch (e) {
         return handleApiError(e, "haszno_proposals_list");
       }
+      return ok2({
+        _meta: { total: proposals.length, note: "Shows pending proposals only via shop token." },
+        proposals: proposals.map((p) => ({
+          id: p.id,
+          productId: p.productId,
+          productName: p.productName,
+          productSku: p.productSku,
+          oldPriceGross: p.oldPriceGross,
+          proposedPriceGross: p.proposedPriceGross,
+          diffGross: p.proposedPriceGross - p.oldPriceGross,
+          reason: p.reason,
+          status: p.status,
+          createdAt: p.createdAt
+        }))
+      });
     }
   );
   server.tool(
     "haszno_proposals_market",
-    `Show pending proposals for a product together with the product's market context.
+    `Show a product's current pricing alongside its pending proposals.
 
-Use this before approving or rejecting to understand whether the proposed
-price makes sense given the current market situation.
+Fetches agent products and pending proposals in parallel. Use this before
+creating a proposal to understand whether a price change is warranted.
 
 Returns:
-  \u2022 product \u2014 name, SKU, costNet (HUF net), current price/margin, AI-recommended
-    price/margin, cheapest market competitor (marketMinGross, marketShop)
-  \u2022 pendingProposals \u2014 proposals with status "pending" for this product, ordered
-    by creation time (newest first)
+  \u2022 product \u2014 id, sku, name, listed, priceGross, stock, supplierName,
+    current margin, recommended price/margin
+  \u2022 pendingProposals \u2014 pending proposals for this product
 
-All prices are in HUF.  "gross" = VAT-inclusive, "net" = VAT-exclusive.
-Margin percentages are calculated on the net sale price after VAT.`,
+Note: costNet, marketMinGross, marketShop are not available via shop tokens.
+All prices are in HUF (gross, VAT-inclusive).`,
     {
-      productId: z2.number().int().positive().describe("The product ID to inspect. Obtain from haszno_proposals_list.")
+      productId: z3.number().int().positive().describe("The product ID to inspect. Obtain from haszno_products_list.")
     },
     { readOnlyHint: true },
     async (args) => {
+      let products;
+      let proposals;
       try {
-        const [products, proposals] = await Promise.all([
-          client.products.list(),
-          client.proposals.list({ status: "pending" })
+        ;
+        [products, proposals] = await Promise.all([
+          client.agent.products(),
+          client.agent.proposals()
         ]);
-        const product = products.find((p) => p.id === args.productId);
-        if (!product) {
-          return err(
-            `Product ${args.productId} not found. Use haszno_proposals_list to see valid product IDs.`
-          );
-        }
-        const pending = proposals.filter((p) => p.productId === args.productId).sort((a, b) => new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime());
-        return ok({
-          product: {
-            id: product.id,
-            sku: product.sku,
-            name: product.name,
-            supplierName: product.supplierName,
-            costNet: product.costNet,
-            stock: product.stock,
-            listed: product.listed,
-            current: {
-              priceGross: product.priceGross,
-              marginNet: product.current.marginNet,
-              marginPct: product.current.marginPct
-            },
-            recommended: {
-              priceGross: product.recommended.priceGross,
-              marginNet: product.recommended.marginNet,
-              marginPct: product.recommended.marginPct
-            },
-            market: {
-              minGross: product.marketMinGross,
-              shop: product.marketShop
-            },
-            rrpGross: product.rrpGross
-          },
-          pendingProposals: pending.map((p) => ({
-            id: p.id,
-            oldPriceGross: p.oldPriceGross,
-            proposedPriceGross: p.proposedPriceGross,
-            diffGross: p.proposedPriceGross - p.oldPriceGross,
-            reason: p.reason,
-            source: p.source,
-            batchId: p.batchId,
-            createdAt: p.createdAt
-          }))
-        });
       } catch (e) {
         return handleApiError(e, "haszno_proposals_market");
+      }
+      const product = products.find((p) => p.id === args.productId);
+      if (!product) {
+        return err2(
+          `Product ${args.productId} not found in your shop. Use haszno_products_list to see valid product IDs.`
+        );
+      }
+      const pending = proposals.filter((p) => p.productId === args.productId).sort((a, b) => new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime());
+      return ok2({
+        product: {
+          id: product.id,
+          sku: product.sku,
+          name: product.name,
+          listed: product.listed,
+          priceGross: product.priceGross,
+          stock: product.stock,
+          supplierName: product.supplierName,
+          current: product.current,
+          recommended: product.recommended
+        },
+        pendingProposals: pending.map((p) => ({
+          id: p.id,
+          oldPriceGross: p.oldPriceGross,
+          proposedPriceGross: p.proposedPriceGross,
+          diffGross: p.proposedPriceGross - p.oldPriceGross,
+          reason: p.reason,
+          createdAt: p.createdAt
+        }))
+      });
+    }
+  );
+  server.tool(
+    "haszno_proposals_create",
+    `Create a pending price-change proposal for a product.
+
+The proposal enters "pending" status and must be approved in the Haszno web
+dashboard before the price changes. Shop tokens can ONLY create pending proposals
+\u2014 approve/reject/rollback are human-only operations by design.
+
+A unique nonce is generated automatically per call (crypto.randomUUID()).
+The server rejects duplicate nonces (409) to prevent replay attacks.
+
+Validation rules:
+  \u2022 productId must be a product in your shop (GET /api/agent/products)
+  \u2022 proposedPriceGross must be a positive integer (HUF gross)
+  \u2022 The server enforces a price floor: proposed price must be \u2265 cost + min margin
+  \u2022 reason is required (1\u2013500 chars)
+
+Returns: { id, status: "pending", createdAt }`,
+    {
+      productId: z3.number().int().positive().describe("ID of the product to propose a price change for."),
+      proposedPriceGross: z3.number().int().positive().describe("Proposed new gross price in HUF (whole forints, VAT-inclusive)."),
+      reason: z3.string().min(1).max(500).describe(
+        'Why you are proposing this price change (1\u2013500 chars). Example: "Competitor reduced to 8900 Ft, matching to stay competitive."'
+      )
+    },
+    { readOnlyHint: false, idempotentHint: false },
+    async (args) => {
+      const nonce = randomUUID();
+      try {
+        const result = await client.agent.createProposal({
+          productId: args.productId,
+          proposedPriceGross: args.proposedPriceGross,
+          reason: args.reason,
+          nonce
+        });
+        return ok2({
+          id: result.id,
+          status: result.status,
+          createdAt: result.createdAt,
+          nonce,
+          note: "Proposal created. It is now PENDING \u2014 a shop owner must approve it in the Haszno web dashboard before the price changes."
+        });
+      } catch (e) {
+        return handleApiError(e, "haszno_proposals_create");
       }
     }
   );
   server.tool(
     "haszno_proposals_approve",
-    `Approve price-change proposals and apply them immediately to the shop.
-
-**WRITE operation \u2014 requires confirm: true.**
-
-If \`ids\` is provided: approve only those proposal IDs.
-If \`ids\` is omitted: approve ALL pending proposals (batch-approve).
-
-On success returns:
-  \u2022 batchId \u2014 ID of the approval batch (save this \u2014 you can roll it back with
-    haszno_proposals_rollback if the prices turn out to be wrong)
-  \u2022 applied \u2014 number of proposals actually applied
-
-Workflow:
-  1. Call haszno_proposals_list with status:"pending" to see what is pending.
-  2. Optionally call haszno_proposals_market per product to check context.
-  3. Call this tool with the IDs you want to approve (or no IDs for all).
-  4. Save the returned batchId in case you need to roll back.`,
+    "Approve price proposals. NOT AVAILABLE with a shop API token \u2014 requires human review via the web dashboard.",
     {
-      ids: z2.array(z2.number().int().positive()).optional().describe(
-        "Proposal IDs to approve. Omit to approve all pending proposals (use with care)."
-      ),
-      confirm: z2.boolean().describe("Must be true to proceed. Safety gate \u2014 prevents accidental writes.")
+      ids: z3.array(z3.number().int().positive()).optional().describe("Proposal IDs to approve.")
     },
-    { destructiveHint: false, idempotentHint: false },
-    async (args) => {
-      const gate = requireConfirm(args.confirm);
-      if (gate) return gate;
-      try {
-        const result = await client.proposals.approve(
-          args.ids ? { ids: args.ids } : void 0
-        );
-        return ok({
-          batchId: result.batchId,
-          applied: result.applied,
-          note: result.batchId ? `Prices updated. Use batchId "${result.batchId}" with haszno_proposals_rollback to undo.` : "No proposals were applied (none were pending)."
-        });
-      } catch (e) {
-        return handleApiError(e, "haszno_proposals_approve");
-      }
-    }
+    { readOnlyHint: false },
+    async (_args) => err2(NOT_AVAILABLE2)
   );
   server.tool(
     "haszno_proposals_reject",
-    `Reject price-change proposals so they will not be applied.
-
-**WRITE operation \u2014 requires confirm: true.**
-
-Rejected proposals are kept in history (status becomes "rejected") so you can
-audit why a proposal was not applied.  Rejecting does NOT change any prices.
-
-Provide the \`ids\` of the proposals to reject.  Use haszno_proposals_list
-with status:"pending" to get the IDs.
-
-Returns:
-  \u2022 rejected \u2014 number of proposals marked as rejected`,
+    "Reject price proposals. NOT AVAILABLE with a shop API token \u2014 requires human review via the web dashboard.",
     {
-      ids: z2.array(z2.number().int().positive()).min(1).describe("IDs of the proposals to reject. At least one is required."),
-      confirm: z2.boolean().describe("Must be true to proceed. Safety gate \u2014 prevents accidental writes.")
+      ids: z3.array(z3.number().int().positive()).min(1).describe("Proposal IDs to reject.")
     },
-    { destructiveHint: false, idempotentHint: true },
-    async (args) => {
-      const gate = requireConfirm(args.confirm);
-      if (gate) return gate;
-      try {
-        const result = await client.proposals.reject({ ids: args.ids });
-        return ok({
-          rejected: result.rejected,
-          note: `${result.rejected} proposal(s) marked as rejected. No prices were changed.`
-        });
-      } catch (e) {
-        return handleApiError(e, "haszno_proposals_reject");
-      }
-    }
+    { readOnlyHint: false },
+    async (_args) => err2(NOT_AVAILABLE2)
   );
   server.tool(
     "haszno_proposals_rollback",
-    `Roll back all price changes from a previously approved batch.
-
-**WRITE operation \u2014 requires confirm: true.**
-**DESTRUCTIVE: restores prices to their pre-approval values.**
-
-Use this when an approval batch produced incorrect prices and you want to
-undo the whole batch atomically.  You need the \`batchId\` returned by
-haszno_proposals_approve.
-
-Returns:
-  \u2022 rolledBack \u2014 number of products whose prices were restored
-
-After rollback the proposals' status changes to "rolled_back".  The products
-return to the prices they had immediately before the batch was approved.`,
+    "Roll back an approval batch. NOT AVAILABLE with a shop API token \u2014 requires human review via the web dashboard.",
     {
-      batchId: z2.string().min(1).describe(
-        'The batchId returned by haszno_proposals_approve. Example: "b-1234abcd". Use haszno_proposals_list to find the batchId of approved proposals.'
-      ),
-      confirm: z2.boolean().describe("Must be true to proceed. Safety gate \u2014 prevents accidental writes.")
+      batchId: z3.string().min(1).describe("The batchId to roll back.")
     },
-    { destructiveHint: true, idempotentHint: true },
-    async (args) => {
-      const gate = requireConfirm(args.confirm);
-      if (gate) return gate;
-      try {
-        const result = await client.proposals.rollback({ batchId: args.batchId });
-        return ok({
-          rolledBack: result.rolledBack,
-          note: `${result.rolledBack} product price(s) restored from batch "${args.batchId}".`
-        });
-      } catch (e) {
-        return handleApiError(e, "haszno_proposals_rollback");
-      }
-    }
+    { readOnlyHint: false },
+    async (_args) => err2(NOT_AVAILABLE2)
   );
 }
 
 // src/tools/rules.ts
-import { z as z3 } from "zod";
-function ok2(data) {
+import { z as z4 } from "zod";
+function ok3(data) {
   return { content: [{ type: "text", text: JSON.stringify(data) }] };
 }
 async function wrap(fn) {
   try {
-    return ok2(await fn());
+    return ok3(await fn());
   } catch (e) {
     const msg = e instanceof Error ? e.message : String(e);
     return { content: [{ type: "text", text: `Error: ${msg}` }], isError: true };
   }
 }
-var conditionSchema = z3.object({
-  field: z3.string().describe(
+var conditionSchema = z4.object({
+  field: z4.string().describe(
     'Product field to test. Known values: "stock", "marginPct", "recommendedChange", "priceGross".'
   ),
-  op: z3.enum(["lt", "lte", "gt", "gte", "eq", "neq", "changed"]).describe(
+  op: z4.enum(["lt", "lte", "gt", "gte", "eq", "neq", "changed"]).describe(
     "Comparison operator: lt/lte/gt/gte compare numbers; eq/neq compare equality; changed detects any change."
   ),
-  value: z3.union([z3.number(), z3.string(), z3.null()]).optional().describe(
+  value: z4.union([z4.number(), z4.string(), z4.null()]).optional().describe(
     'Threshold value. Omit or null for the "changed" operator.'
   )
 });
-var actionSchema = z3.object({
-  type: z3.string().describe(
+var actionSchema = z4.object({
+  type: z4.string().describe(
     'Action type. Known values: "unlist" (remove from shop), "propose_price" (create price proposal), "notify" (log a warning).'
   ),
-  params: z3.record(z3.string(), z3.unknown()).optional().describe(
+  params: z4.record(z4.string(), z4.unknown()).optional().describe(
     "Action-specific parameters. For propose_price: {strategy, maxChangePct, tiers?}. For notify: {text}."
   )
 });
@@ -787,7 +858,7 @@ function registerRulesTools(server, client) {
     {
       description: 'Fetch the rule-execution log. Returns entries ordered newest-first, each with: run id, rule id, rule name, trigger event, affected product id (or null for bulk runs), human-readable outcome summary, and ISO timestamp. Default limit is 25; pass limit (1\u2013200) to get more. Use to audit what automation has done, find products that were automatically unlisted, or collect run-log IDs before calling haszno_rules_undo_unlists. Entries where summary starts with "Lev\xE9ve" are unlist actions that can be undone. Read-only \u2014 always safe to call.',
       inputSchema: {
-        limit: z3.number().int().min(1).max(200).optional().describe("Max entries to return (1\u2013200). Default 25.")
+        limit: z4.number().int().min(1).max(200).optional().describe("Max entries to return (1\u2013200). Default 25.")
       },
       annotations: { readOnlyHint: true }
     },
@@ -806,19 +877,19 @@ function registerRulesTools(server, client) {
     {
       description: 'Create a new automation rule. Pass template="keszlet_or" (or another key from haszno_rules_list_templates) to prefill trigger/conditions/actions from that template \u2014 override any fields you want. Without a template, provide trigger, conditions (optional), and at least one action. trigger values: "feed_import" (runs after every feed import), "market_price" (runs after market-price refresh), "manual" (only runs when explicitly triggered). enabled defaults to true; set false to create the rule paused. Returns the created rule with its id. confirm must be true.',
       inputSchema: {
-        confirm: z3.literal(true).describe("Must be true to execute this write operation."),
-        name: z3.string().min(1).max(120).describe("Human-readable rule name (1\u2013120 chars)."),
-        enabled: z3.boolean().optional().describe("Whether the rule runs automatically. Defaults to true."),
-        trigger: z3.string().describe(
+        confirm: z4.literal(true).describe("Must be true to execute this write operation."),
+        name: z4.string().min(1).max(120).describe("Human-readable rule name (1\u2013120 chars)."),
+        enabled: z4.boolean().optional().describe("Whether the rule runs automatically. Defaults to true."),
+        trigger: z4.string().describe(
           'Event that fires this rule: "feed_import", "market_price", "manual", or any custom string.'
         ),
-        conditions: z3.array(conditionSchema).optional().describe(
+        conditions: z4.array(conditionSchema).optional().describe(
           "Conditions that must ALL match for a product to be acted on. Empty or omitted means all products."
         ),
-        actions: z3.array(actionSchema).describe(
+        actions: z4.array(actionSchema).describe(
           "Actions to perform on matching products. At least one required."
         ),
-        template: z3.string().nullable().optional().describe(
+        template: z4.string().nullable().optional().describe(
           "Template key this rule was based on (informational; use haszno_rules_list_templates to list keys)."
         )
       }
@@ -830,13 +901,13 @@ function registerRulesTools(server, client) {
     {
       description: "Update an existing rule. Only the fields you send are changed; omit a field to leave it unchanged. Most common use: toggle enabled on/off with {id, enabled: false/true}. You can also rename, change the trigger, adjust conditions, or replace all actions. Get rule ids from haszno_rules_list. confirm must be true.",
       inputSchema: {
-        confirm: z3.literal(true).describe("Must be true to execute this write operation."),
-        id: z3.number().int().describe("Rule id (from haszno_rules_list)."),
-        name: z3.string().min(1).max(120).optional().describe("New name (1\u2013120 chars). Omit to keep current."),
-        enabled: z3.boolean().optional().describe("true = active, false = paused. Omit to keep current."),
-        trigger: z3.string().optional().describe("New trigger event. Omit to keep current."),
-        conditions: z3.array(conditionSchema).optional().describe("Replace all conditions. Omit to keep current."),
-        actions: z3.array(actionSchema).optional().describe("Replace all actions. Omit to keep current.")
+        confirm: z4.literal(true).describe("Must be true to execute this write operation."),
+        id: z4.number().int().describe("Rule id (from haszno_rules_list)."),
+        name: z4.string().min(1).max(120).optional().describe("New name (1\u2013120 chars). Omit to keep current."),
+        enabled: z4.boolean().optional().describe("true = active, false = paused. Omit to keep current."),
+        trigger: z4.string().optional().describe("New trigger event. Omit to keep current."),
+        conditions: z4.array(conditionSchema).optional().describe("Replace all conditions. Omit to keep current."),
+        actions: z4.array(actionSchema).optional().describe("Replace all actions. Omit to keep current.")
       }
     },
     ({ confirm: _c, id, name, enabled, trigger, conditions, actions }) => wrap(() => client.rules.update(id, { name, enabled, trigger, conditions, actions }))
@@ -846,8 +917,8 @@ function registerRulesTools(server, client) {
     {
       description: "Permanently delete a rule and its entire run-history. This CANNOT be undone. Prefer disabling the rule (haszno_rules_update with enabled=false) for reversible deactivation. Only delete when the rule is permanently no longer needed. Get rule ids from haszno_rules_list. confirm must be true.",
       inputSchema: {
-        confirm: z3.literal(true).describe("Must be true to execute this destructive operation."),
-        id: z3.number().int().describe("Rule id to delete permanently (from haszno_rules_list).")
+        confirm: z4.literal(true).describe("Must be true to execute this destructive operation."),
+        id: z4.number().int().describe("Rule id to delete permanently (from haszno_rules_list).")
       },
       annotations: { destructiveHint: true }
     },
@@ -858,8 +929,8 @@ function registerRulesTools(server, client) {
     {
       description: 'Manually run a single rule against all currently eligible products, regardless of its trigger setting. Returns {applied, skipped, errors} counts. Use for one-off rule application (e.g. re-price after a manual cost update) or to test a rule before enabling it. If the rule has an "unlist" action and products get delisted, use haszno_rules_list_runs + haszno_rules_undo_unlists to reverse. Get rule ids from haszno_rules_list. confirm must be true.',
       inputSchema: {
-        confirm: z3.literal(true).describe("Must be true to execute this write operation."),
-        id: z3.number().int().describe("Rule id to run (from haszno_rules_list).")
+        confirm: z4.literal(true).describe("Must be true to execute this write operation."),
+        id: z4.number().int().describe("Rule id to run (from haszno_rules_list).")
       }
     },
     ({ confirm: _c, id }) => wrap(() => client.rules.run(id))
@@ -869,7 +940,7 @@ function registerRulesTools(server, client) {
     {
       description: 'Run all currently ENABLED rules whose trigger is "manual" in one shot. Returns aggregate {applied, skipped, errors} counts. Use for bulk re-pricing or cleanup tasks (e.g. apply markup tiers across the whole catalogue). confirm must be true.',
       inputSchema: {
-        confirm: z3.literal(true).describe("Must be true to execute this write operation.")
+        confirm: z4.literal(true).describe("Must be true to execute this write operation.")
       }
     },
     ({ confirm: _c }) => wrap(() => client.rules.runAll())
@@ -879,9 +950,9 @@ function registerRulesTools(server, client) {
     {
       description: 'Fire all ENABLED rules that listen to a specific trigger event, optionally scoped to a subset of product ids. Returns aggregate {applied, skipped, errors} counts. Trigger values: "feed_import" (simulate a feed-import event), "market_price" (simulate a market-price refresh), "manual", or any custom trigger string. Use to replay an event, test trigger-based rules, or selectively apply automation to specific products. confirm must be true.',
       inputSchema: {
-        confirm: z3.literal(true).describe("Must be true to execute this write operation."),
-        trigger: z3.string().describe('Trigger event name, e.g. "feed_import", "market_price", "manual".'),
-        product_ids: z3.array(z3.number().int()).optional().describe(
+        confirm: z4.literal(true).describe("Must be true to execute this write operation."),
+        trigger: z4.string().describe('Trigger event name, e.g. "feed_import", "market_price", "manual".'),
+        product_ids: z4.array(z4.number().int()).optional().describe(
           "Restrict execution to these product ids. Omit to run on all eligible products."
         )
       }
@@ -893,14 +964,14 @@ function registerRulesTools(server, client) {
     {
       description: 'Undo "unlist" actions recorded in the rule-execution log \u2014 re-lists products that were automatically delisted by a rule and marks those log entries as "(visszavonva)" (reversed). Two targeting modes:   ids=[...] \u2014 undo specific run-log row IDs (get these from haszno_rules_list_runs);   rule_id + at \u2014 undo all unlists from a specific rule at a specific ISO timestamp. Only log entries whose summary starts with "Lev\xE9ve" (and are not already reversed) are affected. Returns {relisted: N} with the count of re-listed products. Use after an accidental bulk-unlist or after reviewing rule results and deciding to reverse them. confirm must be true.',
       inputSchema: {
-        confirm: z3.literal(true).describe("Must be true to execute this write operation."),
-        ids: z3.array(z3.number().int()).optional().describe(
+        confirm: z4.literal(true).describe("Must be true to execute this write operation."),
+        ids: z4.array(z4.number().int()).optional().describe(
           "Run-log row IDs to undo (from haszno_rules_list_runs). Use this OR rule_id+at, not both."
         ),
-        rule_id: z3.number().int().optional().describe(
+        rule_id: z4.number().int().optional().describe(
           "Rule id: undo all unlists from this rule at the given timestamp (use with at)."
         ),
-        at: z3.string().optional().describe(
+        at: z4.string().optional().describe(
           'ISO timestamp of the rule run to undo (use with rule_id). Example: "2024-05-10T14:32:00.000Z".'
         )
       }
@@ -912,8 +983,8 @@ function registerRulesTools(server, client) {
     {
       description: "Toggle the global automation kill switch. Pass paused=true to pause all automations: proposal-approve will return HTTP 409 until resumed. Pass paused=false to resume normal operation. This is idempotent \u2014 setting to the current state is harmless. Always check haszno_automation_get first to know the current state. confirm must be true.",
       inputSchema: {
-        confirm: z3.literal(true).describe("Must be true to execute this write operation."),
-        paused: z3.boolean().describe("true = pause all automations and block approvals; false = resume.")
+        confirm: z4.literal(true).describe("Must be true to execute this write operation."),
+        paused: z4.boolean().describe("true = pause all automations and block approvals; false = resume.")
       },
       annotations: { idempotentHint: true }
     },
@@ -922,166 +993,124 @@ function registerRulesTools(server, client) {
 }
 
 // src/tools/orders.ts
-import { z as z4 } from "zod";
+import { z as z5 } from "zod";
+var NOT_AVAILABLE3 = "Not available with a shop API token. This operation requires a session token (web login). Use the Haszno web dashboard to perform this action.";
+function ok4(data) {
+  return { content: [{ type: "text", text: JSON.stringify(data, null, 2) }] };
+}
+function apiErr(msg) {
+  return { isError: true, content: [{ type: "text", text: msg }] };
+}
 function compactOrder(o) {
   return {
     id: o.id,
     externalId: o.externalId,
     customerName: o.customerName,
-    address: o.address,
     status: o.status,
     totalGross: o.totalGross,
-    supplierOrderId: o.supplierOrderId,
-    trackingNumber: o.trackingNumber,
     itemCount: o.items.length,
     createdAt: o.createdAt
   };
 }
-function isDemoEnv() {
-  const url = process.env["HASZNO_API_URL"] ?? process.env["ARFUTAR_API_URL"] ?? "https://haszno.com";
-  return url.includes("demo") || url.includes("staging") || url.includes("localhost");
-}
 function registerOrdersTools(server, client) {
-  server.registerTool(
+  server.tool(
     "haszno_orders_list",
+    `List the last 20 orders from your shop via the agent endpoint.
+
+Returns compact rows sorted newest-first. Fields available: id, externalId,
+customerName, status, totalGross, createdAt, itemCount.
+
+Fields NOT available via shop tokens: address, supplierOrderId, trackingNumber,
+event log \u2014 use the Haszno web dashboard to see those.
+
+Status values: received (new, not yet forwarded), forwarded (sent to supplier),
+shipped (tracking confirmed), error (forwarding failed).
+Money fields are whole forints (HUF), gross (VAT-inclusive).`,
     {
-      title: "List orders",
-      description: "List orders from the Haszno fulfilment pipeline, optionally filtered by status. Returns compact rows (no event log) sorted newest-first. Use to monitor the pipeline, find orders awaiting action, or audit history. Status values: received (new, not yet forwarded), forwarded (sent to supplier), shipped (tracking confirmed), error (forwarding failed). Money fields are whole forints (HUF), gross (VAT-inclusive).",
-      inputSchema: {
-        status: z4.enum(["received", "forwarded", "shipped", "error"]).optional().describe("Filter by order status. Omit to return all statuses."),
-        limit: z4.number().int().min(1).max(50).default(25).optional().describe("Maximum rows to return (1\u201350, default 25).")
-      },
-      annotations: { readOnlyHint: true }
+      status: z5.enum(["received", "forwarded", "shipped", "error"]).optional().describe("Filter by order status. Omit to return all statuses.")
     },
-    async ({ status, limit = 25 }) => {
-      const all = await client.orders.list();
-      const filtered = status ? all.filter((o) => o.status === status) : all;
-      const page = filtered.slice(0, limit);
-      return {
-        content: [
-          {
-            type: "text",
-            text: JSON.stringify({
-              orders: page.map(compactOrder),
-              total: filtered.length,
-              showing: page.length
-            })
-          }
-        ]
-      };
+    { readOnlyHint: true },
+    async (args) => {
+      let all;
+      try {
+        all = await client.agent.orders();
+      } catch (e) {
+        if (e instanceof HasznoApiError) {
+          return apiErr(`API error fetching orders: ${e.message} (HTTP ${e.status})`);
+        }
+        return apiErr(`Unexpected error: ${String(e)}`);
+      }
+      const filtered = args.status ? all.filter((o) => o.status === args.status) : all;
+      return ok4({
+        orders: filtered.map(compactOrder),
+        total: filtered.length
+      });
     }
   );
-  server.registerTool(
+  server.tool(
     "haszno_orders_get",
+    `Get one order with its line items.
+
+Fetches the agent order list and returns the matching order including items
+(name, SKU, qty, unit price in HUF gross).
+
+Fields NOT available via shop tokens: address, supplierOrderId, trackingNumber,
+event log \u2014 use the Haszno web dashboard for full order detail.`,
     {
-      title: "Get order details",
-      description: "Retrieve a single order with full details: items (SKU, qty, unit price in HUF gross), event log (timeline of status changes with timestamps), supplier order ID, and tracking number. Use after haszno_orders_list to drill into a specific order.",
-      inputSchema: {
-        id: z4.number().int().positive().describe("Haszno order ID (integer).")
-      },
-      annotations: { readOnlyHint: true }
+      id: z5.number().int().positive().describe("Haszno order ID.")
     },
-    async ({ id }) => {
-      const all = await client.orders.list();
-      const order = all.find((o) => o.id === id);
+    { readOnlyHint: true },
+    async (args) => {
+      let all;
+      try {
+        all = await client.agent.orders();
+      } catch (e) {
+        if (e instanceof HasznoApiError) {
+          return apiErr(`API error fetching orders: ${e.message} (HTTP ${e.status})`);
+        }
+        return apiErr(`Unexpected error: ${String(e)}`);
+      }
+      const order = all.find((o) => o.id === args.id);
       if (!order) {
-        return {
-          content: [
-            {
-              type: "text",
-              text: JSON.stringify({ error: `Order #${id} not found.` })
-            }
-          ],
-          isError: true
-        };
+        return apiErr(
+          `Order #${args.id} not found in the last 20 orders. Use haszno_orders_list to see available orders.`
+        );
       }
-      return {
-        content: [{ type: "text", text: JSON.stringify(order) }]
-      };
+      return ok4(order);
     }
   );
-  server.registerTool(
+  server.tool(
     "haszno_orders_ship",
+    "Mark an order as shipped. NOT AVAILABLE with a shop API token \u2014 requires a session token.",
     {
-      title: "Mark order as shipped",
-      description: 'Mark an order as shipped (sets status to "shipped" and records a tracking event). Idempotent \u2014 safe to call again if already shipped. Only use this for orders in "forwarded" state; calling it on "received" or "error" orders may produce unexpected results. Returns the updated order object including tracking number if set by the supplier. Requires confirm: true to prevent accidental execution.',
-      inputSchema: {
-        id: z4.number().int().positive().describe("ID of the order to mark as shipped."),
-        confirm: z4.literal(true).describe("Must be true. Prevents accidental execution of this write operation.")
-      },
-      annotations: { readOnlyHint: false, destructiveHint: false, idempotentHint: true }
+      id: z5.number().int().positive().describe("Order ID.")
     },
-    async ({ id, confirm: _confirm }) => {
-      const updated = await client.orders.ship(id);
-      return {
-        content: [{ type: "text", text: JSON.stringify(updated) }]
-      };
-    }
+    { readOnlyHint: false },
+    async (_args) => apiErr(NOT_AVAILABLE3)
   );
-  server.registerTool(
+  server.tool(
     "haszno_orders_receive",
+    "Inject a new order into the forwarding pipeline. NOT AVAILABLE with a shop API token \u2014 requires a session token.",
     {
-      title: "Receive / inject a new order",
-      description: "Inject a new order into the Haszno forwarding pipeline via the shop webhook. The system will attempt to forward it to the connected supplier automatically (email or simulated, depending on supplier configuration). Use this only when integrating a shop checkout flow or testing end-to-end order handling. Each item SKU must already exist in the Haszno product catalogue; unknown SKUs return an error. Returns the new order ID on success. Requires confirm: true to prevent accidental writes.",
-      inputSchema: {
-        externalId: z4.string().min(1).max(64).describe(
-          `The shop's own order reference (e.g. "WEB-00123"). Must be unique within the shop.`
-        ),
-        customerName: z4.string().min(1).max(120).describe("Full name of the end customer."),
-        address: z4.string().min(1).max(300).describe(
-          'Delivery address as a single string (e.g. "9200 Mosonmagyar\xF3v\xE1r, F\u0151 u. 1.").'
-        ),
-        items: z4.array(
-          z4.object({
-            sku: z4.string().min(1).describe("Supplier SKU of the product."),
-            qty: z4.number().int().positive().describe("Quantity ordered (positive integer).")
-          })
-        ).min(1).describe("Order line items. At least one item required."),
-        confirm: z4.literal(true).describe("Must be true. Prevents accidental execution of this write operation.")
-      },
-      annotations: { readOnlyHint: false, destructiveHint: false }
+      externalId: z5.string().describe("Shop order reference."),
+      customerName: z5.string().describe("Customer name."),
+      address: z5.string().describe("Delivery address."),
+      items: z5.array(z5.object({ sku: z5.string(), qty: z5.number().int().positive() })).min(1)
     },
-    async ({ externalId, customerName, address, items, confirm: _confirm }) => {
-      const result = await client.orders.receiveOrder({ externalId, customerName, address, items });
-      return {
-        content: [{ type: "text", text: JSON.stringify(result) }]
-      };
-    }
+    { readOnlyHint: false },
+    async (_args) => apiErr(NOT_AVAILABLE3)
   );
-  server.registerTool(
+  server.tool(
     "haszno_orders_create_demo",
-    {
-      title: "Create demo order (demo environment only)",
-      description: 'Create a randomly-generated demo order using in-stock products. ONLY call this against a demo or staging environment (HASZNO_API_URL must contain "demo", "staging", or "localhost"). Calling against a production shop will be blocked by this tool. Useful for end-to-end testing of the forwarding pipeline without manual order construction. Requires confirm: true.',
-      inputSchema: {
-        confirm: z4.literal(true).describe("Must be true. Prevents accidental execution of this write operation.")
-      },
-      annotations: { readOnlyHint: false, destructiveHint: false, idempotentHint: false }
-    },
-    async ({ confirm: _confirm }) => {
-      if (!isDemoEnv()) {
-        return {
-          content: [
-            {
-              type: "text",
-              text: JSON.stringify({
-                error: "haszno_orders_create_demo is only allowed in demo/staging environments. Set HASZNO_API_URL to a demo or localhost URL to use this tool."
-              })
-            }
-          ],
-          isError: true
-        };
-      }
-      const result = await client.orders.createDemo();
-      return {
-        content: [{ type: "text", text: JSON.stringify(result) }]
-      };
-    }
+    "Create a demo order. NOT AVAILABLE with a shop API token \u2014 requires a session token.",
+    {},
+    { readOnlyHint: false },
+    async (_args) => apiErr(NOT_AVAILABLE3)
   );
 }
 
 // src/tools/ideas.ts
-import { z as z5 } from "zod";
+import { z as z6 } from "zod";
 function compactItem(item, rank) {
   return {
     rank,
@@ -1104,9 +1133,9 @@ function registerIdeasListTool(server, client) {
       title: "Haszno term\xE9k\xF6tlet lista",
       description: "Get the ranked product idea shortlist for this shop. Products are scored by Google Trends demand (HU) and margin safety. Use this to find which new products to add, or which catalogue items are currently trending in Hungary. Returns: anchor keyword (the Google Trends normalisation base), geo, total count, and an array of items each with: rank, id, sku, name, supplier, stock, costNet_HUF (net cost in HUF), suggestedPriceGross_HUF (VAT-inclusive), marginNet_HUF, marginPct, trendScore (0\u2013100; null if not yet scored). Default limit 25; max 100. Read-only, no confirmation needed.",
       inputSchema: {
-        min_score: z5.number().min(0).max(100).optional().describe("Keep only items with trendScore >= this value (0\u2013100)."),
-        supplier: z5.string().optional().describe("Filter by supplier name \u2014 case-insensitive substring match."),
-        limit: z5.number().int().min(1).max(100).optional().describe("Maximum number of items to return. Default 25, max 100.")
+        min_score: z6.number().min(0).max(100).optional().describe("Keep only items with trendScore >= this value (0\u2013100)."),
+        supplier: z6.string().optional().describe("Filter by supplier name \u2014 case-insensitive substring match."),
+        limit: z6.number().int().min(1).max(100).optional().describe("Maximum number of items to return. Default 25, max 100.")
       },
       annotations: { readOnlyHint: true }
     },
@@ -1153,7 +1182,7 @@ function registerAiShortlistTool(server, client) {
       title: "Haszno AI term\xE9k\xF6tlet shortlist",
       description: `Get an AI-curated shortlist of up to 5 products that best fit this shop. The AI evaluates own catalogue items (not yet listed, positive margin) and partner network products, then picks the ones most complementary to the shop's existing mix. Returns: summary (1\u20132 Hungarian sentences), picks (\u22645 items \u2014 each with name, supplier, recommendedPriceGross_HUF (VAT-inclusive), marginNet_HUF, marginPct, fit score 0\u2013100, aiReason in Hungarian), usage (model, inputTokens, outputTokens, estimatedCostFt_HUF), and cached flag. "cached: true" means the server returned a 24-hour cached result \u2014 no additional AI spend occurred. Requires confirm: true because it may trigger an AI API call on the server.`,
       inputSchema: {
-        confirm: z5.literal(true).describe("Must be true. Confirms you accept a possible AI API call and its cost.")
+        confirm: z6.literal(true).describe("Must be true. Confirms you accept a possible AI API call and its cost.")
       },
       annotations: { readOnlyHint: false, destructiveHint: false, idempotentHint: false }
     },
@@ -1197,8 +1226,8 @@ function registerAiDescriptionTool(server, client) {
       title: "Haszno AI term\xE9kleiras gener\xE1tor",
       description: "Generate an AI product description for a shop product. Uses the product name and its trend keyword to write a Hungarian webshop product description. The result is returned as text \u2014 it is NOT saved automatically. Review it, then apply it via haszno_products_update if satisfied. Get the product_id from haszno_ideas_list or haszno_products_list. Requires confirm: true because it triggers an AI API call on the server.",
       inputSchema: {
-        product_id: z5.number().int().min(1).describe("Numeric id of the shop product to describe."),
-        confirm: z5.literal(true).describe("Must be true. Confirms you accept the AI API call and its cost.")
+        product_id: z6.number().int().min(1).describe("Numeric id of the shop product to describe."),
+        confirm: z6.literal(true).describe("Must be true. Confirms you accept the AI API call and its cost.")
       },
       annotations: { readOnlyHint: false, destructiveHint: false, idempotentHint: false }
     },
@@ -1222,7 +1251,7 @@ function registerFillKeywordsTool(server, client) {
       title: "Haszno trendkulcssz\xF3 felt\xF6lt\xE9s",
       description: "Fill missing Google Trends keywords for all products that have none. Products without a trend keyword are excluded from the idea scoring; running this improves haszno_ideas_list and haszno_ideas_ai_shortlist. Uses Claude AI to suggest a generic Hungarian + English search phrase per product. Changes are saved immediately on the server. Returns: { updated: N }. Returns { updated: 0 } when all keywords are already filled \u2014 safe to call repeatedly (outcome is idempotent). Requires confirm: true because it modifies shop data and incurs AI cost.",
       inputSchema: {
-        confirm: z5.literal(true).describe("Must be true. Confirms the write and AI API call.")
+        confirm: z6.literal(true).describe("Must be true. Confirms the write and AI API call.")
       },
       annotations: { readOnlyHint: false, destructiveHint: false, idempotentHint: true }
     },
@@ -1249,7 +1278,7 @@ function registerIdeasTools(server, client) {
 // src/tools/feeds.ts
 import { readFileSync } from "fs";
 import { resolve as resolvePath, sep } from "path";
-import { z as z6 } from "zod";
+import { z as z7 } from "zod";
 function resolveContent(content, filePath) {
   if (content != null && content.length > 0) return content;
   if (filePath != null && filePath.length > 0) {
@@ -1320,17 +1349,17 @@ Returns { created, updated, total } \u2014 counts of product rows affected.
 Prices in the feed are gross HUF (brutt\xF3 Ft).
 WRITE OPERATION \u2014 requires confirm: true; with confirm: false (default) the call is a no-op safe dry-run.`,
       inputSchema: {
-        supplierId: z6.number().int().positive().describe(
+        supplierId: z7.number().int().positive().describe(
           "ID of the network supplier whose feed this is. Get IDs from haszno_catalog_list_suppliers."
         ),
-        format: z6.enum(["csv", "xml"]).describe(
+        format: z7.enum(["csv", "xml"]).describe(
           'Feed format. Use "csv" for comma/tab-separated, "xml" for \xC1rukeres\u0151-style XML.'
         ),
-        content: z6.string().optional().describe("Feed text content pasted directly. Either this or filePath is required."),
-        filePath: z6.string().optional().describe(
+        content: z7.string().optional().describe("Feed text content pasted directly. Either this or filePath is required."),
+        filePath: z7.string().optional().describe(
           "Absolute path to the feed file on the local filesystem. The MCP server reads it. Either this or content is required."
         ),
-        confirm: z6.boolean().default(false).describe(
+        confirm: z7.boolean().default(false).describe(
           "Set to true to execute the import. When false (default) the tool returns a dry-run summary without touching the database."
         )
       },
@@ -1361,10 +1390,10 @@ WRITE OPERATION \u2014 requires confirm: true; with confirm: false (default) the
       let feedContent;
       try {
         feedContent = resolveContent(content, filePath);
-      } catch (err2) {
+      } catch (err3) {
         return {
           content: [
-            { type: "text", text: JSON.stringify({ error: err2.message }) }
+            { type: "text", text: JSON.stringify({ error: err3.message }) }
           ],
           isError: true
         };
@@ -1374,10 +1403,10 @@ WRITE OPERATION \u2014 requires confirm: true; with confirm: false (default) the
         return {
           content: [{ type: "text", text: JSON.stringify(result) }]
         };
-      } catch (err2) {
+      } catch (err3) {
         return {
           content: [
-            { type: "text", text: JSON.stringify({ error: err2.message }) }
+            { type: "text", text: JSON.stringify({ error: err3.message }) }
           ],
           isError: true
         };
@@ -1396,11 +1425,11 @@ Triggers the market_price rule afterwards.
 Safe to re-import (idempotent): running the same CSV twice sets the same values.
 WRITE OPERATION \u2014 requires confirm: true.`,
       inputSchema: {
-        content: z6.string().optional().describe("CSV text content. Either this or filePath is required."),
-        filePath: z6.string().optional().describe(
+        content: z7.string().optional().describe("CSV text content. Either this or filePath is required."),
+        filePath: z7.string().optional().describe(
           "Absolute path to the CSV file on the local filesystem. Either this or content is required."
         ),
-        confirm: z6.boolean().default(false).describe(
+        confirm: z7.boolean().default(false).describe(
           "Set to true to execute the import. When false (default) no changes are made."
         )
       },
@@ -1429,10 +1458,10 @@ WRITE OPERATION \u2014 requires confirm: true.`,
       let csvContent;
       try {
         csvContent = resolveContent(content, filePath);
-      } catch (err2) {
+      } catch (err3) {
         return {
           content: [
-            { type: "text", text: JSON.stringify({ error: err2.message }) }
+            { type: "text", text: JSON.stringify({ error: err3.message }) }
           ],
           isError: true
         };
@@ -1442,10 +1471,10 @@ WRITE OPERATION \u2014 requires confirm: true.`,
         return {
           content: [{ type: "text", text: JSON.stringify(result) }]
         };
-      } catch (err2) {
+      } catch (err3) {
         return {
           content: [
-            { type: "text", text: JSON.stringify({ error: err2.message }) }
+            { type: "text", text: JSON.stringify({ error: err3.message }) }
           ],
           isError: true
         };
@@ -1465,7 +1494,7 @@ Prices are gross HUF (brutt\xF3 Ft).
 Set fetch_summary: true to GET the live feeds and return item_count + 3-item sample \u2014
 useful for verifying the feeds are populated after a supplier import.`,
       inputSchema: {
-        fetch_summary: z6.boolean().default(false).describe(
+        fetch_summary: z7.boolean().default(false).describe(
           "If true, fetches both feeds and returns item_count + 3-item sample. Default false (returns URLs only)."
         )
       },
@@ -1500,8 +1529,8 @@ useful for verifying the feeds are populated after a supplier import.`,
           if (!res.ok) return { ok: false, status: res.status, error: `HTTP ${res.status}` };
           const xml = await res.text();
           return { ok: true, xml };
-        } catch (err2) {
-          return { ok: false, error: err2.message };
+        } catch (err3) {
+          return { ok: false, error: err3.message };
         }
       }
       const [arRes, goRes] = await Promise.all([fetchFeed(arukeresoUrl), fetchFeed(googleUrl)]);
@@ -1531,7 +1560,7 @@ useful for verifying the feeds are populated after a supplier import.`,
 import * as fs from "fs";
 import * as os from "os";
 import * as path from "path";
-import { z as z7 } from "zod";
+import { z as z8 } from "zod";
 function json(value) {
   return { content: [{ type: "text", text: JSON.stringify(value, null, 2) }] };
 }
@@ -1577,16 +1606,16 @@ function registerAccountTools(server, client) {
       title: "Update pricing rule settings",
       description: `Updates the shop's global pricing rule parameters. All three numeric fields are required. Use haszno_account_get_settings first to read the current values, then adjust only what needs to change. "undercutPct": percentage to undercut the cheapest market competitor (e.g. 5 \u2192 5% lower). "minMarginPct": minimum net profit margin % to keep (e.g. 10 \u2192 never price below 10% margin). "vatPct": the shop's VAT rate for gross/net conversion (e.g. 27 for Hungarian \xC1FA). All money values in the system are gross HUF. Requires confirm: true to prevent accidental changes \u2014 do NOT omit it.`,
       inputSchema: {
-        undercutPct: z7.number().min(0).max(100).describe(
+        undercutPct: z8.number().min(0).max(100).describe(
           "Percentage to undercut the cheapest market price (0\u2013100). E.g. 5 = price 5% below the market minimum."
         ),
-        minMarginPct: z7.number().min(0).max(100).describe(
+        minMarginPct: z8.number().min(0).max(100).describe(
           "Minimum net profit margin percentage (0\u2013100). The rule will never go below this."
         ),
-        vatPct: z7.number().min(0).max(100).describe(
+        vatPct: z8.number().min(0).max(100).describe(
           "VAT rate used for gross \u2194 net conversions (e.g. 27 for Hungarian \xC1FA)."
         ),
-        confirm: z7.literal(true).describe(
+        confirm: z8.literal(true).describe(
           "Must be exactly true. This is a safeguard \u2014 always pass true explicitly."
         )
       },
@@ -1627,7 +1656,7 @@ function registerAccountTools(server, client) {
       title: "Get profit impact report",
       description: `Returns the financial impact of Haszno's pricing optimisation over the last N days. "days" \u2014 the reporting window (defaults to 30 if omitted). "extraProfit" \u2014 additional gross HUF profit earned compared to no-automation baseline; "baseline" \u2014 baseline gross profit without Haszno; "pctGain" \u2014 percentage uplift ((extraProfit / baseline) \xD7 100); "orders" \u2014 total orders in the window; "autoForwardedOrders" \u2014 orders automatically forwarded to suppliers without manual action. All money values are gross HUF.`,
       inputSchema: {
-        days: z7.number().int().min(1).max(365).optional().describe(
+        days: z8.number().int().min(1).max(365).optional().describe(
           "Look-back window in days (1\u2013365). Defaults to 30 when omitted."
         )
       },
@@ -1664,16 +1693,16 @@ function registerAccountTools(server, client) {
       title: "Save API credentials to local config",
       description: 'Writes Haszno API credentials to ~/.config/haszno/config.json (chmod 600) so the CLI and MCP server can read them without requiring environment variables on every invocation. Provide "apiUrl" (default https://haszno.com) and either "apiKey" (sent as the x-api-key header) or "basicAuth" ("user:pass" for HTTP Basic \u2014 only used while per-shop API keys are unavailable). The file is created with restricted permissions (owner read/write only) and credentials are NEVER logged. Requires confirm: true. WARNING: overwrites any previously saved credentials.',
       inputSchema: {
-        apiUrl: z7.string().url().describe(
+        apiUrl: z8.string().url().describe(
           "Base URL of the Haszno API, default https://haszno.com"
         ),
-        apiKey: z7.string().min(1).optional().describe(
+        apiKey: z8.string().min(1).optional().describe(
           "API key, sent as the x-api-key header (preferred). Provide this OR basicAuth, not both."
         ),
-        basicAuth: z7.string().regex(/^[^:]+:[^:]+$/).optional().describe(
+        basicAuth: z8.string().regex(/^[^:]+:[^:]+$/).optional().describe(
           'HTTP Basic credentials in "user:pass" format. Fallback when API keys are not yet available.'
         ),
-        confirm: z7.literal(true).describe(
+        confirm: z8.literal(true).describe(
           "Must be exactly true. This is a safeguard \u2014 always pass true explicitly."
         )
       },
@@ -1720,7 +1749,7 @@ function registerAccountTools(server, client) {
 }
 
 // src/tools/catalogue.ts
-import { z as z8 } from "zod";
+import { z as z9 } from "zod";
 function registerCatalogueTools(server, client) {
   server.registerTool(
     "haszno_catalogue_search",
@@ -1728,18 +1757,18 @@ function registerCatalogueTools(server, client) {
       title: "Search partner product catalogue",
       description: "Search the Haszno dropshipping partner product catalogue. Returns products with pricing, margin, and stock details. Filter by free-text (name/category), category key, partner/supplier id, margin %, price range, stock availability, country, or sort order. Returns: { items: CatalogueItem[], total, facets } \u2014 facets include partners, countries, categories, margin buckets for drill-down. Default page size is 24. Use inStock=true for available stock only. Use marginPct filter to surface only profitable products.",
       inputSchema: {
-        q: z8.string().optional().describe("Free-text search on product name or category"),
-        cats: z8.string().optional().describe('Comma-separated category keys, e.g. "elektronika,ruh\xE1zat"'),
-        partner: z8.number().int().positive().optional().describe("Filter by supplier/partner id"),
-        minMarginPct: z8.number().optional().describe("Minimum margin % (e.g. 15 means 15%)"),
-        maxPrice: z8.number().optional().describe("Maximum RRP gross price in HUF"),
-        minPrice: z8.number().optional().describe("Minimum RRP gross price in HUF"),
-        inStock: z8.boolean().optional().describe("true = only products currently in stock"),
-        hasImage: z8.boolean().optional().describe("true = only products that have an image"),
-        country: z8.string().optional().describe('Supplier country code, e.g. "HU", "DE"'),
-        sort: z8.enum(["margin_desc", "price_asc", "price_desc", "name_asc"]).optional().describe("Sort order (default name_asc)"),
-        page: z8.number().int().min(1).optional().describe("Page number, 1-based (default 1)"),
-        pageSize: z8.number().int().min(1).max(100).optional().describe("Items per page, max 100 (default 24)")
+        q: z9.string().optional().describe("Free-text search on product name or category"),
+        cats: z9.string().optional().describe('Comma-separated category keys, e.g. "elektronika,ruh\xE1zat"'),
+        partner: z9.number().int().positive().optional().describe("Filter by supplier/partner id"),
+        minMarginPct: z9.number().optional().describe("Minimum margin % (e.g. 15 means 15%)"),
+        maxPrice: z9.number().optional().describe("Maximum RRP gross price in HUF"),
+        minPrice: z9.number().optional().describe("Minimum RRP gross price in HUF"),
+        inStock: z9.boolean().optional().describe("true = only products currently in stock"),
+        hasImage: z9.boolean().optional().describe("true = only products that have an image"),
+        country: z9.string().optional().describe('Supplier country code, e.g. "HU", "DE"'),
+        sort: z9.enum(["margin_desc", "price_asc", "price_desc", "name_asc"]).optional().describe("Sort order (default name_asc)"),
+        page: z9.number().int().min(1).optional().describe("Page number, 1-based (default 1)"),
+        pageSize: z9.number().int().min(1).max(100).optional().describe("Items per page, max 100 (default 24)")
       },
       annotations: { readOnlyHint: true }
     },
@@ -1767,9 +1796,9 @@ function registerCatalogueTools(server, client) {
       title: "List import list items",
       description: "Lists products the user has added to their Haszno import list. The import list is a staging area: products are added here from the catalogue before being pushed to a connected webshop. Each item shows id, name, sku, partnerName, pricing, stock, pushStatus, and targetConnectionId. pushStatus: varakozik=waiting, kuldve=sent, kesz=done, hiba=error. Filter by status or partner/supplier id.",
       inputSchema: {
-        status: z8.enum(["varakozik", "kuldve", "kesz", "hiba"]).optional().describe("Filter by push status"),
-        partner: z8.number().int().positive().optional().describe("Filter by supplier/partner id"),
-        q: z8.string().optional().describe("Free-text search on product name or SKU")
+        status: z9.enum(["varakozik", "kuldve", "kesz", "hiba"]).optional().describe("Filter by push status"),
+        partner: z9.number().int().positive().optional().describe("Filter by supplier/partner id"),
+        q: z9.string().optional().describe("Free-text search on product name or SKU")
       },
       annotations: { readOnlyHint: true }
     },
@@ -1788,7 +1817,7 @@ function registerCatalogueTools(server, client) {
       title: "Add products to import list",
       description: "Adds one or more network/catalogue products to the import list by their catalogue product IDs. Use haszno_catalogue_search first to find product IDs. Returns { added, skipped } \u2014 skipped means the product was already in the list. This is a non-destructive write; no product is created in the shop yet. To push to the shop, use haszno_import_list_push afterwards.",
       inputSchema: {
-        networkProductIds: z8.array(z8.number().int().positive()).min(1).max(100).describe("IDs of catalogue/network products to add (from haszno_catalogue_search)")
+        networkProductIds: z9.array(z9.number().int().positive()).min(1).max(100).describe("IDs of catalogue/network products to add (from haszno_catalogue_search)")
       },
       annotations: { readOnlyHint: false, destructiveHint: false, idempotentHint: true }
     },
@@ -1803,9 +1832,9 @@ function registerCatalogueTools(server, client) {
       title: "Push import list items to connected store",
       description: `Pushes import-list items to the user's connected webshop (WooCommerce, Shopify, etc.). Requires confirm=true to prevent accidental pushes. You MUST pass the import list item IDs (from haszno_import_list_list). Optionally specify targetConnectionId to target a specific store connection. Returns { pushed, failed, errors }. Note: the connected store must have status "kapcsolva" (use haszno_connections_list to check).`,
       inputSchema: {
-        ids: z8.array(z8.number().int().positive()).min(1).describe("Import list item IDs to push (from haszno_import_list_list)"),
-        targetConnectionId: z8.number().int().positive().optional().describe("Store connection ID to push to (from haszno_connections_list); uses shop default if omitted"),
-        confirm: z8.boolean().describe("Must be true to execute the push \u2014 set false for a preview/dry-run response")
+        ids: z9.array(z9.number().int().positive()).min(1).describe("Import list item IDs to push (from haszno_import_list_list)"),
+        targetConnectionId: z9.number().int().positive().optional().describe("Store connection ID to push to (from haszno_connections_list); uses shop default if omitted"),
+        confirm: z9.boolean().describe("Must be true to execute the push \u2014 set false for a preview/dry-run response")
       },
       annotations: { readOnlyHint: false, destructiveHint: false, idempotentHint: false }
     },
@@ -1830,7 +1859,7 @@ function registerCatalogueTools(server, client) {
 }
 
 // src/tools/connections.ts
-import { z as z9 } from "zod";
+import { z as z10 } from "zod";
 function registerConnectionsTools(server, client) {
   server.registerTool(
     "haszno_connections_list",
@@ -1838,7 +1867,7 @@ function registerConnectionsTools(server, client) {
       title: "List connected webshops",
       description: `Lists the user's connected webshop store connections. Each connection has: id, platform (shoprenter/unas/woocommerce/shopify/medusa/mock), name, status (uj=new/setup, domain_ok=domain verified, kapcsolva=connected, hiba=error), domain, lastError, connectedAt, lastSyncAt. Use the connection id as targetConnectionId in haszno_import_list_push. Only connections with status "kapcsolva" can receive pushed products.`,
       inputSchema: {
-        status: z9.enum(["uj", "domain_ok", "kapcsolva", "hiba"]).optional().describe("Filter by connection status")
+        status: z10.enum(["uj", "domain_ok", "kapcsolva", "hiba"]).optional().describe("Filter by connection status")
       },
       annotations: { readOnlyHint: true }
     },
@@ -1853,7 +1882,7 @@ function registerConnectionsTools(server, client) {
 }
 
 // src/tools/peers.ts
-import { z as z10 } from "zod";
+import { z as z11 } from "zod";
 function registerPeersTools(server, client) {
   server.registerTool(
     "haszno_peers_invite_create",
@@ -1861,9 +1890,9 @@ function registerPeersTools(server, client) {
       title: "Create peer invite",
       description: "Creates a one-time invite code that lets another Haszno shop become your peer partner for a specific supplier. The invited shop gains access to that supplier's catalogue. You must own or manage the supplier (supplierId). Requires confirm=true to prevent accidental invite creation. Without confirm:true returns a dry-run preview and does NOT call the API. Returns { code, expiresAt, supplierId } \u2014 share the code with the partner. Each invite is single-use and expires at the given datetime.",
       inputSchema: {
-        supplierId: z10.number().int().positive().describe("Supplier ID to share access for"),
-        expiresAt: z10.string().describe('Expiry datetime in ISO-8601, e.g. "2026-12-31T23:59:00Z". Must be in the future.'),
-        confirm: z10.boolean().describe("Must be true to create the invite \u2014 set false for a preview/dry-run response")
+        supplierId: z11.number().int().positive().describe("Supplier ID to share access for"),
+        expiresAt: z11.string().describe('Expiry datetime in ISO-8601, e.g. "2026-12-31T23:59:00Z". Must be in the future.'),
+        confirm: z11.boolean().describe("Must be true to create the invite \u2014 set false for a preview/dry-run response")
       },
       annotations: { readOnlyHint: false, destructiveHint: false, idempotentHint: false }
     },
@@ -1907,9 +1936,9 @@ function registerPeersTools(server, client) {
       title: "Accept peer invite",
       description: "Accepts a peer invite code, establishing a partner link between your shop and the inviting supplier's catalogue. After acceptance you can browse and import products from that supplier's catalogue. Requires confirm=true. The code is single-use and invalidated after acceptance. Returns the created PeerLink: { id, supplierId, partner, createdAt }.",
       inputSchema: {
-        code: z10.string().min(1).describe('Invite code received from the partner (e.g. "abc123xyz")'),
-        acceptorId: z10.string().min(1).max(120).describe("Your shop/tenant identifier (the accepting party)"),
-        confirm: z10.boolean().describe("Must be true to accept \u2014 set false for a preview/dry-run response")
+        code: z11.string().min(1).describe('Invite code received from the partner (e.g. "abc123xyz")'),
+        acceptorId: z11.string().min(1).max(120).describe("Your shop/tenant identifier (the accepting party)"),
+        confirm: z11.boolean().describe("Must be true to accept \u2014 set false for a preview/dry-run response")
       },
       annotations: { readOnlyHint: false, destructiveHint: false, idempotentHint: false }
     },
@@ -1932,7 +1961,7 @@ function registerPeersTools(server, client) {
 }
 
 // src/tools/blog.ts
-import { z as z11 } from "zod";
+import { z as z12 } from "zod";
 function registerBlogTools(server, client) {
   server.registerTool(
     "haszno_blog_latest",
@@ -1940,8 +1969,8 @@ function registerBlogTools(server, client) {
       title: "Latest Haszno market blog post",
       description: 'Returns the latest published Haszno market insight blog post(s). Posts contain aggregated market trends from the Haszno dropshipping network. period: "het" (weekly summary) or "honap" (monthly summary). Each post includes: title, summary, bodyMd (Markdown), period, periodStart/End, publishedAt, and optional data with rankedCategories / rankedProducts / shopsCount. All data is anonymised aggregate from >= 5 shops \u2014 no per-shop information. Returns the most recent N posts matching the period filter.',
       inputSchema: {
-        period: z11.enum(["het", "honap"]).optional().describe('"het" for weekly, "honap" for monthly posts. Omit to get both.'),
-        limit: z11.number().int().min(1).max(10).optional().describe("Maximum posts to return (default 1)")
+        period: z12.enum(["het", "honap"]).optional().describe('"het" for weekly, "honap" for monthly posts. Omit to get both.'),
+        limit: z12.number().int().min(1).max(10).optional().describe("Maximum posts to return (default 1)")
       },
       annotations: { readOnlyHint: true }
     },
@@ -1980,7 +2009,7 @@ function readHasznoConfig() {
   return {};
 }
 async function main() {
-  const envApiKey = process.env["HASZNO_API_KEY"] ?? process.env["ARFUTAR_API_KEY"];
+  const envApiKey = process.env["HASZNO_API_TOKEN"] ?? process.env["HASZNO_API_KEY"] ?? process.env["ARFUTAR_API_KEY"];
   const envApiUrl = process.env["HASZNO_API_URL"] ?? process.env["ARFUTAR_API_URL"];
   const envBasic = process.env["HASZNO_BASIC"] ?? process.env["ARFUTAR_BASIC"];
   let apiKey = envApiKey;
@@ -2012,8 +2041,8 @@ async function main() {
   const transport = new StdioServerTransport();
   await server.connect(transport);
 }
-main().catch((err2) => {
-  console.error("haszno-mcp fatal error:", err2);
+main().catch((err3) => {
+  console.error("haszno-mcp fatal error:", err3);
   process.exit(1);
 });
 //# sourceMappingURL=index.js.map

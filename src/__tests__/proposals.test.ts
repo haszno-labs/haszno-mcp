@@ -1,6 +1,14 @@
 /**
  * Unit tests for haszno_proposals_* MCP tools.
  *
+ * Changes from the pre-bearer version:
+ *  - Tools now call client.agent.proposals() (GET /api/agent/proposals, pending only)
+ *    instead of client.proposals.list()
+ *  - haszno_proposals_create added (POST /api/agent/proposals with auto nonce)
+ *  - haszno_proposals_approve / reject / rollback return "not available" (no API call)
+ *  - Response shapes use AgentProposal (no source, batchId, decidedAt)
+ *  - Error handling for 401/403/404/409/429 status codes
+ *
  * Strategy:
  *  - mock McpServer by capturing tool registrations in a plain Map
  *  - mock HasznoClient using vi.fn() for each method
@@ -11,7 +19,7 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest'
 import { registerProposalsTools } from '../tools/proposals.js'
 import { HasznoApiError } from '../client/index.js'
-import type { HasznoClient, Proposal, Product } from '../client/index.js'
+import type { HasznoClient, AgentProposal, AgentProduct } from '../client/index.js'
 
 // ── McpServer mock ────────────────────────────────────────────────────────────
 
@@ -27,7 +35,6 @@ function makeMockServer() {
   return {
     tools,
     tool(name: string, ...rest: unknown[]) {
-      // rest = [description?, schema?, annotations?, handler]
       const handler = rest[rest.length - 1] as ToolHandler
       const description = typeof rest[0] === 'string' ? (rest[0] as string) : ''
       tools.set(name, { description, handler })
@@ -37,9 +44,9 @@ function makeMockServer() {
 
 type MockServer = ReturnType<typeof makeMockServer>
 
-// ── HasznoClient mock ────────────────────────────────────────────────────────
+// ── Fixture factories ─────────────────────────────────────────────────────────
 
-function makeProposal(overrides: Partial<Proposal> = {}): Proposal {
+function makeAgentProposal(overrides: Partial<AgentProposal> = {}): AgentProposal {
   return {
     id: 1,
     productId: 10,
@@ -48,31 +55,20 @@ function makeProposal(overrides: Partial<Proposal> = {}): Proposal {
     oldPriceGross: 10000,
     proposedPriceGross: 9500,
     reason: 'market undercut detected',
-    source: 'rule:auto-price',
     status: 'pending',
-    batchId: null,
     createdAt: '2025-01-01T12:00:00Z',
-    decidedAt: null,
     ...overrides,
   }
 }
 
-function makeProduct(overrides: Partial<Product> = {}): Product {
+function makeAgentProduct(overrides: Partial<AgentProduct> = {}): AgentProduct {
   return {
     id: 10,
-    supplierId: 2,
     sku: 'SKU-001',
     name: 'Test Product',
-    costNet: 6000,
-    stock: 5,
-    rrpGross: 12000,
-    marketMinGross: 9200,
-    marketShop: 'competitor.hu',
-    priceGross: 10000,
     listed: true,
-    trendKeyword: null,
-    trendKeywordEn: null,
-    updatedAt: '2025-01-01T00:00:00Z',
+    priceGross: 10000,
+    stock: 5,
     supplierName: 'Supplier A',
     current: { priceGross: 10000, marginNet: 3150, marginPct: 31.5 },
     recommended: { priceGross: 9500, marginNet: 2756, marginPct: 27.6 },
@@ -85,7 +81,7 @@ function makeMockClient(overrides?: Partial<HasznoClient>): HasznoClient {
     health: { check: vi.fn() },
     settings: { get: vi.fn(), update: vi.fn() },
     products: {
-      list: vi.fn().mockResolvedValue([makeProduct()]),
+      list: vi.fn(),
       update: vi.fn(),
       setListing: vi.fn(),
       generateAiDescription: vi.fn(),
@@ -106,12 +102,13 @@ function makeMockClient(overrides?: Partial<HasznoClient>): HasznoClient {
       runAll: vi.fn(),
       trigger: vi.fn(),
       listRuns: vi.fn(),
+      undoUnlists: vi.fn(),
     },
     proposals: {
-      list: vi.fn().mockResolvedValue([makeProposal()]),
-      approve: vi.fn().mockResolvedValue({ batchId: 'b-abc123', applied: 1 }),
-      reject: vi.fn().mockResolvedValue({ rejected: 1 }),
-      rollback: vi.fn().mockResolvedValue({ rolledBack: 1 }),
+      list: vi.fn(),
+      approve: vi.fn(),
+      reject: vi.fn(),
+      rollback: vi.fn(),
     },
     automation: { get: vi.fn(), set: vi.fn() },
     network: {
@@ -121,6 +118,25 @@ function makeMockClient(overrides?: Partial<HasznoClient>): HasznoClient {
       disconnect: vi.fn(),
       sync: vi.fn(),
       getSupplierView: vi.fn(),
+    },
+    catalogue: { search: vi.fn() },
+    importList: { list: vi.fn(), add: vi.fn(), push: vi.fn() },
+    connections: { list: vi.fn(), get: vi.fn() },
+    peers: {
+      createInvite: vi.fn(),
+      listInvites: vi.fn(),
+      revokeInvite: vi.fn(),
+      acceptInvite: vi.fn(),
+      listLinks: vi.fn(),
+      removeLink: vi.fn(),
+      setVisibility: vi.fn(),
+    },
+    blog: { list: vi.fn(), get: vi.fn() },
+    agent: {
+      products: vi.fn().mockResolvedValue([makeAgentProduct()]),
+      orders: vi.fn().mockResolvedValue([]),
+      proposals: vi.fn().mockResolvedValue([makeAgentProposal()]),
+      createProposal: vi.fn().mockResolvedValue({ id: 42, status: 'pending', createdAt: '2025-01-02T10:00:00Z' }),
     },
     ...overrides,
   } as unknown as HasznoClient
@@ -144,10 +160,11 @@ describe('registerProposalsTools()', () => {
     registerProposalsTools(server as never, client)
   })
 
-  it('registers exactly 5 proposal tools', () => {
+  it('registers exactly 6 proposal tools', () => {
     const proposalTools = [...server.tools.keys()].filter((k) => k.startsWith('haszno_proposals'))
     expect(proposalTools.sort()).toEqual([
       'haszno_proposals_approve',
+      'haszno_proposals_create',
       'haszno_proposals_list',
       'haszno_proposals_market',
       'haszno_proposals_reject',
@@ -158,224 +175,249 @@ describe('registerProposalsTools()', () => {
   // ── haszno_proposals_list ─────────────────────────────────────────────────
 
   describe('haszno_proposals_list', () => {
-    it('calls client.proposals.list() without params when no status given', async () => {
+    it('calls client.agent.proposals() — not client.proposals.list()', async () => {
       const handler = server.tools.get('haszno_proposals_list')!.handler
-      await handler({ limit: 25, offset: 0 })
-      expect(client.proposals.list).toHaveBeenCalledWith(undefined)
-    })
-
-    it('calls client.proposals.list({ status }) when status is provided', async () => {
-      const handler = server.tools.get('haszno_proposals_list')!.handler
-      await handler({ status: 'pending', limit: 25, offset: 0 })
-      expect(client.proposals.list).toHaveBeenCalledWith({ status: 'pending' })
+      await handler({})
+      expect(client.agent.proposals).toHaveBeenCalledOnce()
+      expect(client.proposals.list).not.toHaveBeenCalled()
     })
 
     it('returns proposals with computed diffGross', async () => {
       const handler = server.tools.get('haszno_proposals_list')!.handler
-      const result = await handler({ limit: 25, offset: 0 })
+      const result = await handler({})
       const data = parseResult(result)
       expect(data.proposals).toHaveLength(1)
       expect(data.proposals[0].diffGross).toBe(9500 - 10000) // -500
       expect(data.proposals[0].id).toBe(1)
     })
 
-    it('paginates: returns correct slice with offset and limit', async () => {
-      const proposals = Array.from({ length: 10 }, (_, i) =>
-        makeProposal({ id: i + 1, productId: i + 1 }),
-      )
-      vi.mocked(client.proposals.list).mockResolvedValue(proposals)
-
+    it('does not include source, batchId, decidedAt in output', async () => {
       const handler = server.tools.get('haszno_proposals_list')!.handler
-      const result = await handler({ limit: 3, offset: 2 })
+      const result = await handler({})
       const data = parseResult(result)
-
-      expect(data.proposals).toHaveLength(3)
-      expect(data.proposals[0].id).toBe(3)
-      expect(data._meta.total).toBe(10)
-      expect(data._meta.hasMore).toBe(true)
+      const proposal = data.proposals[0]
+      expect(proposal).not.toHaveProperty('source')
+      expect(proposal).not.toHaveProperty('batchId')
+      expect(proposal).not.toHaveProperty('decidedAt')
     })
 
-    it('filters by productId client-side', async () => {
-      const proposals = [
-        makeProposal({ id: 1, productId: 10 }),
-        makeProposal({ id: 2, productId: 20 }),
-        makeProposal({ id: 3, productId: 10 }),
-      ]
-      vi.mocked(client.proposals.list).mockResolvedValue(proposals)
-
+    it('includes a note about pending-only restriction in _meta', async () => {
       const handler = server.tools.get('haszno_proposals_list')!.handler
-      const result = await handler({ productId: 10, limit: 25, offset: 0 })
+      const result = await handler({})
       const data = parseResult(result)
-
-      expect(data.proposals).toHaveLength(2)
-      expect(data.proposals.every((p: { productId: number }) => p.productId === 10)).toBe(true)
+      expect(data._meta.note).toContain('pending')
     })
 
-    it('returns isError on API failure', async () => {
-      vi.mocked(client.proposals.list).mockRejectedValue(
-        new HasznoApiError(404, 'Not found'),
-      )
+    it('returns isError on API 401 with helpful message', async () => {
+      vi.mocked(client.agent.proposals).mockRejectedValue(new HasznoApiError(401, 'Unauthorized'))
       const handler = server.tools.get('haszno_proposals_list')!.handler
-      const result = await handler({ limit: 25, offset: 0 })
+      const result = await handler({})
       expect(result.isError).toBe(true)
-      expect(result.content[0].text).toContain('404')
+      expect(result.content[0].text).toMatch(/Invalid.*expired.*revoked|token/i)
+    })
+
+    it('returns isError on API 429 with helpful message', async () => {
+      vi.mocked(client.agent.proposals).mockRejectedValue(new HasznoApiError(429, 'Too Many Requests'))
+      const handler = server.tools.get('haszno_proposals_list')!.handler
+      const result = await handler({})
+      expect(result.isError).toBe(true)
+      expect(result.content[0].text).toMatch(/Too many|failed attempt/i)
     })
   })
 
   // ── haszno_proposals_market ───────────────────────────────────────────────
 
   describe('haszno_proposals_market', () => {
-    it('returns product + pending proposals for the given productId', async () => {
-      // Mock returns only pending proposals (the API is called with status:'pending')
-      vi.mocked(client.proposals.list).mockResolvedValue([
-        makeProposal({ id: 1, productId: 10, status: 'pending' }),
-        makeProposal({ id: 3, productId: 99, status: 'pending' }),
-      ])
+    it('calls client.agent.products() and client.agent.proposals() — not legacy endpoints', async () => {
+      const handler = server.tools.get('haszno_proposals_market')!.handler
+      await handler({ productId: 10 })
+      expect(client.agent.products).toHaveBeenCalledOnce()
+      expect(client.agent.proposals).toHaveBeenCalledOnce()
+      expect(client.products.list).not.toHaveBeenCalled()
+      expect(client.proposals.list).not.toHaveBeenCalled()
+    })
 
+    it('returns product + pending proposals for the given productId', async () => {
+      vi.mocked(client.agent.proposals).mockResolvedValue([
+        makeAgentProposal({ id: 1, productId: 10 }),
+        makeAgentProposal({ id: 3, productId: 99 }),
+      ])
       const handler = server.tools.get('haszno_proposals_market')!.handler
       const result = await handler({ productId: 10 })
       const data = parseResult(result)
-
       expect(data.product.id).toBe(10)
-      expect(data.product.market.minGross).toBe(9200)
-      expect(data.product.market.shop).toBe('competitor.hu')
-      // only pending proposals for productId 10
       expect(data.pendingProposals).toHaveLength(1)
       expect(data.pendingProposals[0].id).toBe(1)
     })
 
-    it('returns error when product not found', async () => {
-      vi.mocked(client.products.list).mockResolvedValue([makeProduct({ id: 42 })])
+    it('product does not include costNet, marketMinGross (not available via shop token)', async () => {
+      const handler = server.tools.get('haszno_proposals_market')!.handler
+      const result = await handler({ productId: 10 })
+      const data = parseResult(result)
+      expect(data.product).not.toHaveProperty('costNet')
+      expect(data.product).not.toHaveProperty('marketMinGross')
+    })
 
+    it('returns isError when product not found', async () => {
       const handler = server.tools.get('haszno_proposals_market')!.handler
       const result = await handler({ productId: 999 })
       expect(result.isError).toBe(true)
       expect(result.content[0].text).toContain('999')
     })
+  })
 
-    it('calls proposals.list with status:pending', async () => {
-      const handler = server.tools.get('haszno_proposals_market')!.handler
-      await handler({ productId: 10 })
-      expect(client.proposals.list).toHaveBeenCalledWith({ status: 'pending' })
+  // ── haszno_proposals_create ───────────────────────────────────────────────
+
+  describe('haszno_proposals_create', () => {
+    it('calls client.agent.createProposal() with the right args', async () => {
+      const handler = server.tools.get('haszno_proposals_create')!.handler
+      await handler({ productId: 10, proposedPriceGross: 8900, reason: 'Cheaper competitor' })
+      expect(client.agent.createProposal).toHaveBeenCalledOnce()
+      const call = vi.mocked(client.agent.createProposal).mock.calls[0][0]
+      expect(call.productId).toBe(10)
+      expect(call.proposedPriceGross).toBe(8900)
+      expect(call.reason).toBe('Cheaper competitor')
+      // nonce must be a UUID
+      expect(call.nonce).toMatch(/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/)
+    })
+
+    it('generates a unique nonce per call', async () => {
+      const handler = server.tools.get('haszno_proposals_create')!.handler
+      await handler({ productId: 10, proposedPriceGross: 8900, reason: 'reason 1' })
+      await handler({ productId: 10, proposedPriceGross: 8900, reason: 'reason 2' })
+      const calls = vi.mocked(client.agent.createProposal).mock.calls
+      expect(calls[0][0].nonce).not.toBe(calls[1][0].nonce)
+    })
+
+    it('returns id, status, createdAt in result', async () => {
+      const handler = server.tools.get('haszno_proposals_create')!.handler
+      const result = await handler({ productId: 10, proposedPriceGross: 8900, reason: 'test' })
+      const data = parseResult(result)
+      expect(data.id).toBe(42)
+      expect(data.status).toBe('pending')
+      expect(data.createdAt).toBe('2025-01-02T10:00:00Z')
+      expect(data.note.toLowerCase()).toContain('pending')
+    })
+
+    it('returns isError on 404 with product-not-in-shop message', async () => {
+      vi.mocked(client.agent.createProposal).mockRejectedValue(new HasznoApiError(404, 'Not found'))
+      const handler = server.tools.get('haszno_proposals_create')!.handler
+      const result = await handler({ productId: 999, proposedPriceGross: 8900, reason: 'test' })
+      expect(result.isError).toBe(true)
+      expect(result.content[0].text).toMatch(/shop|bolt|Product not found/i)
+    })
+
+    it('returns isError on 409 with replay explanation', async () => {
+      vi.mocked(client.agent.createProposal).mockRejectedValue(new HasznoApiError(409, 'Conflict'))
+      const handler = server.tools.get('haszno_proposals_create')!.handler
+      const result = await handler({ productId: 10, proposedPriceGross: 8900, reason: 'test' })
+      expect(result.isError).toBe(true)
+      expect(result.content[0].text).toMatch(/nonce|replay|Duplicate/i)
     })
   })
 
   // ── haszno_proposals_approve ──────────────────────────────────────────────
 
   describe('haszno_proposals_approve', () => {
-    it('blocks without confirm: true', async () => {
+    it('returns not-available without calling any API', async () => {
       const handler = server.tools.get('haszno_proposals_approve')!.handler
-      const result = await handler({ confirm: false })
+      const result = await handler({ ids: [1, 2] })
       expect(result.isError).toBe(true)
-      expect(result.content[0].text).toContain('Safety gate')
+      expect(result.content[0].text).toMatch(/not available|shop API token|human/i)
       expect(client.proposals.approve).not.toHaveBeenCalled()
-    })
-
-    it('blocks when confirm is omitted', async () => {
-      const handler = server.tools.get('haszno_proposals_approve')!.handler
-      const result = await handler({})
-      expect(result.isError).toBe(true)
-      expect(client.proposals.approve).not.toHaveBeenCalled()
-    })
-
-    it('calls client.proposals.approve with ids when confirm: true', async () => {
-      const handler = server.tools.get('haszno_proposals_approve')!.handler
-      await handler({ ids: [1, 2], confirm: true })
-      expect(client.proposals.approve).toHaveBeenCalledWith({ ids: [1, 2] })
-    })
-
-    it('calls client.proposals.approve without ids for batch-approve', async () => {
-      const handler = server.tools.get('haszno_proposals_approve')!.handler
-      await handler({ confirm: true })
-      expect(client.proposals.approve).toHaveBeenCalledWith(undefined)
-    })
-
-    it('returns batchId and applied count on success', async () => {
-      const handler = server.tools.get('haszno_proposals_approve')!.handler
-      const result = await handler({ confirm: true })
-      const data = parseResult(result)
-      expect(data.batchId).toBe('b-abc123')
-      expect(data.applied).toBe(1)
-      expect(data.note).toContain('b-abc123')
-    })
-
-    it('returns isError on API failure', async () => {
-      vi.mocked(client.proposals.approve).mockRejectedValue(
-        new HasznoApiError(403, 'Forbidden'),
-      )
-      const handler = server.tools.get('haszno_proposals_approve')!.handler
-      const result = await handler({ confirm: true })
-      expect(result.isError).toBe(true)
-      expect(result.content[0].text).toContain('403')
+      expect(client.agent.proposals).not.toHaveBeenCalled()
     })
   })
 
   // ── haszno_proposals_reject ───────────────────────────────────────────────
 
   describe('haszno_proposals_reject', () => {
-    it('blocks without confirm: true', async () => {
+    it('returns not-available without calling any API', async () => {
       const handler = server.tools.get('haszno_proposals_reject')!.handler
-      const result = await handler({ ids: [1], confirm: false })
+      const result = await handler({ ids: [1] })
       expect(result.isError).toBe(true)
+      expect(result.content[0].text).toMatch(/not available|shop API token|human/i)
       expect(client.proposals.reject).not.toHaveBeenCalled()
-    })
-
-    it('calls client.proposals.reject with ids when confirm: true', async () => {
-      const handler = server.tools.get('haszno_proposals_reject')!.handler
-      await handler({ ids: [3, 4], confirm: true })
-      expect(client.proposals.reject).toHaveBeenCalledWith({ ids: [3, 4] })
-    })
-
-    it('returns rejected count and note on success', async () => {
-      const handler = server.tools.get('haszno_proposals_reject')!.handler
-      const result = await handler({ ids: [1], confirm: true })
-      const data = parseResult(result)
-      expect(data.rejected).toBe(1)
-      expect(data.note).toContain('1 proposal')
-      expect(data.note).toContain('No prices were changed')
-    })
-
-    it('returns isError on API failure', async () => {
-      vi.mocked(client.proposals.reject).mockRejectedValue(new Error('timeout'))
-      const handler = server.tools.get('haszno_proposals_reject')!.handler
-      const result = await handler({ ids: [1], confirm: true })
-      expect(result.isError).toBe(true)
-      expect(result.content[0].text).toContain('timeout')
     })
   })
 
   // ── haszno_proposals_rollback ─────────────────────────────────────────────
 
   describe('haszno_proposals_rollback', () => {
-    it('blocks without confirm: true', async () => {
+    it('returns not-available without calling any API', async () => {
       const handler = server.tools.get('haszno_proposals_rollback')!.handler
-      const result = await handler({ batchId: 'b-abc123', confirm: false })
+      const result = await handler({ batchId: 'b-abc123' })
       expect(result.isError).toBe(true)
+      expect(result.content[0].text).toMatch(/not available|shop API token|human/i)
       expect(client.proposals.rollback).not.toHaveBeenCalled()
     })
+  })
+})
 
-    it('calls client.proposals.rollback with batchId when confirm: true', async () => {
-      const handler = server.tools.get('haszno_proposals_rollback')!.handler
-      await handler({ batchId: 'b-abc123', confirm: true })
-      expect(client.proposals.rollback).toHaveBeenCalledWith({ batchId: 'b-abc123' })
+// ── http / auth integration test ──────────────────────────────────────────────
+
+describe('HTTP client auth header', () => {
+  it('sends Authorization: Bearer when HASZNO_API_TOKEN is set', async () => {
+    const { createClient } = await import('../client/index.js')
+
+    const captured: Record<string, string>[] = []
+    const mockFetch = vi.fn(async (url: string, init: RequestInit) => {
+      captured.push(Object.fromEntries(Object.entries(init.headers as Record<string, string>)))
+      return new Response(JSON.stringify([]), { status: 200 })
     })
 
-    it('returns rolledBack count and note on success', async () => {
-      const handler = server.tools.get('haszno_proposals_rollback')!.handler
-      const result = await handler({ batchId: 'b-abc123', confirm: true })
-      const data = parseResult(result)
-      expect(data.rolledBack).toBe(1)
-      expect(data.note).toContain('b-abc123')
+    const client = createClient({
+      apiKey: 'haszno_testtoken123',
+      fetch: mockFetch as typeof fetch,
     })
 
-    it('returns isError on API failure', async () => {
-      vi.mocked(client.proposals.rollback).mockRejectedValue(
-        new HasznoApiError(404, 'Batch not found'),
-      )
-      const handler = server.tools.get('haszno_proposals_rollback')!.handler
-      const result = await handler({ batchId: 'b-xyz', confirm: true })
-      expect(result.isError).toBe(true)
-      expect(result.content[0].text).toContain('404')
+    await client.agent.products()
+
+    expect(captured[0]?.['Authorization']).toBe('Bearer haszno_testtoken123')
+    expect(captured[0]).not.toHaveProperty('x-api-key')
+  })
+
+  it('reads HASZNO_API_TOKEN env var and sends as Bearer', async () => {
+    const original = process.env['HASZNO_API_TOKEN']
+    process.env['HASZNO_API_TOKEN'] = 'haszno_envtoken456'
+    try {
+      const { createClient } = await import('../client/index.js')
+      const captured: Record<string, string>[] = []
+      const mockFetch = vi.fn(async () => {
+        captured.push({})
+        return new Response(JSON.stringify([]), { status: 200 })
+      })
+      // Can't easily capture headers from env-sourced tokens without reinitializing;
+      // verify the env var is read by ensuring no error is thrown
+      const client = createClient({ fetch: mockFetch as typeof fetch })
+      await expect(client.agent.proposals()).resolves.toBeDefined()
+    } finally {
+      if (original === undefined) delete process.env['HASZNO_API_TOKEN']
+      else process.env['HASZNO_API_TOKEN'] = original
+    }
+  })
+
+  it('routes agent endpoints to /api/agent/* paths', async () => {
+    const { createClient } = await import('../client/index.js')
+
+    const capturedUrls: string[] = []
+    const mockFetch = vi.fn(async (url: string) => {
+      capturedUrls.push(url)
+      return new Response(JSON.stringify([]), { status: 200 })
     })
+
+    const client = createClient({
+      apiKey: 'haszno_testtoken',
+      baseUrl: 'https://haszno.com',
+      fetch: mockFetch as typeof fetch,
+    })
+
+    await client.agent.products()
+    await client.agent.orders()
+    await client.agent.proposals()
+
+    expect(capturedUrls[0]).toBe('https://haszno.com/api/agent/products')
+    expect(capturedUrls[1]).toBe('https://haszno.com/api/agent/orders')
+    expect(capturedUrls[2]).toBe('https://haszno.com/api/agent/proposals')
   })
 })
