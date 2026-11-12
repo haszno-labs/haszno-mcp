@@ -49,12 +49,39 @@ claude mcp add haszno -- node ~/.haszno/haszno-mcp/dist/index.js
 
 ---
 
-## Authentication
+## Authentication — two modes
 
-The server resolves credentials in this order:
+The server supports two credential modes. The mode is selected automatically based on
+the credential you provide.
 
-1. `HASZNO_API_KEY` / `HASZNO_API_URL` environment variables
-2. `ARFUTAR_API_KEY` / `ARFUTAR_API_URL` (silent backwards-compatibility)
+### Mode 1 — Shop token (agent access, `haszno_` prefix)
+
+Shop tokens start with `haszno_` and grant access to the **agent endpoints**:
+read products, read orders, read and **submit** proposals. Everything else
+(settings, automation rules, feeds, catalog management, …) is blocked and
+returns an error immediately with no HTTP call.
+
+Shop tokens are issued in the Haszno web app → **API-kulcsok**:
+- Scopes: `read` (GET) and/or `write` (submit proposals)
+- Expiry: 90 days; renewal requires human approval
+- Human-only approval: the shop owner must accept each token request in the web app
+
+Set the token with the **preferred** env var:
+
+```bash
+export HASZNO_API_TOKEN=haszno_xxxxxxxxxxxxxxxxxxxx
+```
+
+### Mode 2 — Legacy API key (full access)
+
+Any credential that does **not** start with `haszno_` (plain API keys, HTTP Basic)
+is forwarded via `x-api-key` or `Authorization: Basic` exactly as before.
+All tools and operations are available.
+
+### Credential resolution order
+
+1. `HASZNO_API_TOKEN` — preferred for shop tokens
+2. `HASZNO_API_KEY` / `ARFUTAR_API_KEY` — also accepted (shop token or legacy key)
 3. `~/.config/haszno/config.json` — written by `haszno configure` in the CLI
 4. `~/.config/arfutar/config.json` (silent backwards-compatibility)
 
@@ -67,7 +94,7 @@ Config file format (flat, not profile-keyed):
 }
 ```
 
-You can also configure this through the MCP server itself:
+You can also configure credentials through the MCP server itself:
 
 ```
 haszno_account_configure(apiUrl: "https://haszno.com", apiKey: "haszno_xxxx", confirm: true)
@@ -80,7 +107,8 @@ haszno_account_configure(apiUrl: "https://haszno.com", apiKey: "haszno_xxxx", co
 | Variable | Description |
 |---|---|
 | `HASZNO_API_URL` | Base URL of your Haszno instance (default: `https://haszno.com`) |
-| `HASZNO_API_KEY` | API key for authentication |
+| `HASZNO_API_TOKEN` | Shop token (preferred; for `haszno_` prefixed tokens) |
+| `HASZNO_API_KEY` | API key — shop token or legacy key |
 
 ---
 
@@ -109,9 +137,10 @@ haszno_account_configure(apiUrl: "https://haszno.com", apiKey: "haszno_xxxx", co
 ### Price proposals (`haszno_proposals_*`)
 - `haszno_proposals_list` — list / paginate proposals
 - `haszno_proposals_market` — proposal + market context
-- `haszno_proposals_approve` — approve proposals
-- `haszno_proposals_reject` — reject proposals
-- `haszno_proposals_rollback` — roll back a batch
+- `haszno_proposals_approve` — approve proposals *(legacy key only)*
+- `haszno_proposals_reject` — reject proposals *(legacy key only)*
+- `haszno_proposals_rollback` — roll back a batch *(legacy key only)*
+- `haszno_proposals_propose` — submit a new price proposal *(shop token + write scope)*
 
 ### Automation / Rules (`haszno_rules_*`, `haszno_automation_*`)
 - `haszno_rules_list_templates` — rule templates

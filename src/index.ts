@@ -8,7 +8,7 @@
  *   claude mcp add haszno -- node ~/.haszno/haszno-mcp/dist/index.js
  *
  * Credentials are read from (in priority order):
- *   1. HASZNO_API_KEY / HASZNO_API_URL environment variables
+ *   1. HASZNO_API_TOKEN (per-shop token), then HASZNO_API_KEY / HASZNO_API_URL environment variables
  *   2. ARFUTAR_API_KEY / ARFUTAR_API_URL (silent fallback for migration)
  *   3. ~/.config/haszno/config.json  (written by `haszno configure`)
  *   4. ~/.config/arfutar/config.json (silent fallback for migration)
@@ -57,7 +57,8 @@ function readHasznoConfig(): { apiUrl?: string; apiKey?: string; basicAuth?: str
 
 async function main() {
   // Priority: env vars (new + fallback) > config file
-  const envApiKey = process.env['HASZNO_API_KEY'] ?? process.env['ARFUTAR_API_KEY']
+  // HASZNO_API_TOKEN (per-shop token) wins over the older key variables, as documented in the README.
+  const envApiKey = process.env['HASZNO_API_TOKEN'] ?? process.env['HASZNO_API_KEY'] ?? process.env['ARFUTAR_API_KEY']
   const envApiUrl = process.env['HASZNO_API_URL'] ?? process.env['ARFUTAR_API_URL']
   const envBasic = process.env['HASZNO_BASIC'] ?? process.env['ARFUTAR_BASIC']
 

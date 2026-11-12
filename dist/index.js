@@ -18,9 +18,16 @@ var HasznoApiError = class extends Error {
 };
 
 // src/client/http.ts
+var SHOP_TOKEN_PREFIX = "haszno_";
+function isShopToken(key) {
+  return !!key?.startsWith(SHOP_TOKEN_PREFIX);
+}
 function buildAuthHeader(opts) {
-  const key = opts.apiKey ?? process.env["HASZNO_API_KEY"] ?? process.env["ARFUTAR_API_KEY"];
-  if (key) return { "x-api-key": key };
+  const key = opts.apiKey ?? process.env["HASZNO_API_TOKEN"] ?? process.env["HASZNO_API_KEY"] ?? process.env["ARFUTAR_API_KEY"];
+  if (key) {
+    if (isShopToken(key)) return { Authorization: `Bearer ${key}` };
+    return { "x-api-key": key };
+  }
   const basic = opts.basicAuth ?? process.env["HASZNO_BASIC"] ?? process.env["ARFUTAR_BASIC"];
   if (basic) {
     const encoded = Buffer.from(basic).toString("base64");
@@ -100,7 +107,137 @@ function del(path3, opts) {
 }
 
 // src/client/index.ts
+var ShopTokenNotSupportedError = class extends Error {
+  isShopTokenNotSupported = true;
+  operation;
+  constructor(operation) {
+    super(
+      `"${operation}" nem \xE9rhet\u0151 el bolt API-tokennel \u2014 haszn\xE1lja a Haszno webalkalmaz\xE1st (https://haszno.com). Az \xFCgyn\xF6k-token csak olvas\xE1si (GET /api/agent/*) \xE9s javaslat-bek\xFCld\xE9si (POST /api/agent/proposals) m\u0171veletekre jogosult.`
+    );
+    this.name = "ShopTokenNotSupportedError";
+    this.operation = operation;
+  }
+};
+function detectShopToken(opts) {
+  const key = opts.apiKey ?? process.env["HASZNO_API_TOKEN"] ?? process.env["HASZNO_API_KEY"] ?? process.env["ARFUTAR_API_KEY"];
+  return isShopToken(key) ? key : void 0;
+}
+function notSupported(op) {
+  return (..._args) => {
+    return Promise.reject(new ShopTokenNotSupportedError(op));
+  };
+}
 function createClient(opts = {}) {
+  const shopToken = detectShopToken(opts);
+  if (shopToken) {
+    return createShopTokenClient({ ...opts, apiKey: shopToken });
+  }
+  return createLegacyClient(opts);
+}
+function createShopTokenClient(opts) {
+  const o = opts;
+  return {
+    health: {
+      check: () => get("/api/health", o)
+    },
+    // settings.get is not on the agent API — blocked
+    settings: {
+      get: notSupported("settings.get"),
+      update: notSupported("settings.update")
+    },
+    // /api/agent/products — shop-scoped, no purchase cost
+    products: {
+      list: (_params) => get("/api/agent/products", o),
+      update: notSupported("products.update"),
+      setListing: notSupported("products.setListing"),
+      generateAiDescription: notSupported("products.generateAiDescription"),
+      applyPrices: notSupported("products.applyPrices")
+    },
+    stats: {
+      get: notSupported("stats.get"),
+      getImpact: notSupported("stats.getImpact")
+    },
+    suppliers: {
+      list: notSupported("suppliers.list")
+    },
+    feeds: {
+      importFeed: notSupported("feeds.importFeed"),
+      importMarketPrices: notSupported("feeds.importMarketPrices")
+    },
+    // /api/agent/orders — last 20 orders, shop-scoped
+    orders: {
+      list: () => get("/api/agent/orders", o),
+      receiveOrder: notSupported("orders.receiveOrder"),
+      ship: notSupported("orders.ship"),
+      createDemo: notSupported("orders.createDemo")
+    },
+    recommendations: {
+      get: notSupported("recommendations.get"),
+      getAiShortlist: notSupported("recommendations.getAiShortlist"),
+      fillTrendKeywords: notSupported("recommendations.fillTrendKeywords")
+    },
+    rules: {
+      listTemplates: notSupported("rules.listTemplates"),
+      list: notSupported("rules.list"),
+      create: notSupported("rules.create"),
+      update: notSupported("rules.update"),
+      delete: notSupported("rules.delete"),
+      run: notSupported("rules.run"),
+      runAll: notSupported("rules.runAll"),
+      trigger: notSupported("rules.trigger"),
+      listRuns: notSupported("rules.listRuns"),
+      undoUnlists: notSupported("rules.undoUnlists")
+    },
+    proposals: {
+      // /api/agent/proposals — returns pending proposals for this shop
+      list: (_params) => get("/api/agent/proposals", o),
+      // approve/reject/rollback are human-only — blocked for agent tokens
+      approve: notSupported("proposals.approve"),
+      reject: notSupported("proposals.reject"),
+      rollback: notSupported("proposals.rollback"),
+      // POST /api/agent/proposals — submit a price-change proposal for human review
+      propose: (body) => post("/api/agent/proposals", body, o)
+    },
+    automation: {
+      get: notSupported("automation.get"),
+      set: notSupported("automation.set")
+    },
+    network: {
+      listSuppliers: notSupported("network.listSuppliers"),
+      getSupplierProducts: notSupported("network.getSupplierProducts"),
+      connect: notSupported("network.connect"),
+      disconnect: notSupported("network.disconnect"),
+      sync: notSupported("network.sync"),
+      getSupplierView: notSupported("network.getSupplierView")
+    },
+    catalogue: {
+      search: notSupported("catalogue.search")
+    },
+    importList: {
+      list: notSupported("importList.list"),
+      add: notSupported("importList.add"),
+      push: notSupported("importList.push")
+    },
+    connections: {
+      list: notSupported("connections.list"),
+      get: notSupported("connections.get")
+    },
+    peers: {
+      createInvite: notSupported("peers.createInvite"),
+      listInvites: notSupported("peers.listInvites"),
+      revokeInvite: notSupported("peers.revokeInvite"),
+      acceptInvite: notSupported("peers.acceptInvite"),
+      listLinks: notSupported("peers.listLinks"),
+      removeLink: notSupported("peers.removeLink"),
+      setVisibility: notSupported("peers.setVisibility")
+    },
+    blog: {
+      list: notSupported("blog.list"),
+      get: notSupported("blog.get")
+    }
+  };
+}
+function createLegacyClient(opts) {
   const o = opts;
   return {
     health: {
@@ -167,7 +304,9 @@ function createClient(opts = {}) {
       },
       approve: (body) => post("/api/proposals/approve", body ?? {}, o),
       reject: (body) => post("/api/proposals/reject", body, o),
-      rollback: (body) => post("/api/proposals/rollback", body, o)
+      rollback: (body) => post("/api/proposals/rollback", body, o),
+      // Legacy mode: no agent propose endpoint; not applicable outside shop-token mode
+      propose: notSupported("proposals.propose (requires a shop API token)")
     },
     automation: {
       get: () => get("/api/automation", o),
@@ -462,6 +601,7 @@ function registerProductsTools(_server, _client) {
 }
 
 // src/tools/proposals.ts
+import { randomUUID } from "crypto";
 import { z as z2 } from "zod";
 function ok(data) {
   return { content: [{ type: "text", text: JSON.stringify(data, null, 2) }] };
@@ -478,6 +618,9 @@ function requireConfirm(confirm) {
   return null;
 }
 function handleApiError(e, action) {
+  if (e instanceof ShopTokenNotSupportedError) {
+    return err(e.message);
+  }
   if (e instanceof HasznoApiError) {
     return err(`API error during ${action}: ${e.message} (status ${e.status})`);
   }
@@ -691,6 +834,64 @@ Returns:
         });
       } catch (e) {
         return handleApiError(e, "haszno_proposals_reject");
+      }
+    }
+  );
+  server.tool(
+    "haszno_proposals_propose",
+    `Submit a price-change proposal for human review (shop API token only).
+
+**Requires a shop API token** (starts with "haszno_") sent as Bearer.
+
+Creates a PENDING proposal for the given product. The price is NEVER applied
+automatically \u2014 a human must approve it via the Haszno web app.
+
+Constraints:
+  \u2022 proposedPriceGross must be \u2265 the minimum-profit price floor (cost \xD7 (1+VAT)
+    / (1\u2212minMarginPct)). The server enforces this \u2014 a price below floor returns 422.
+  \u2022 reason must be 1\u2013500 characters of plain text. It is stored verbatim and
+    shown to the shop owner \u2014 write clearly why the price change makes sense.
+  \u2022 A nonce is generated automatically and reused on transport retries to prevent
+    duplicate proposals. Do not call this tool twice for the same change.
+
+Returns on success:
+  \u2022 id \u2014 the new proposal's ID
+  \u2022 status \u2014 always "pending"
+  \u2022 createdAt \u2014 ISO timestamp
+
+Error codes:
+  \u2022 401 \u2014 token invalid, expired, or revoked
+  \u2022 403 \u2014 token scope is "read"; needs "write"
+  \u2022 404 \u2014 product ID not found (or not in this shop)
+  \u2022 409 \u2014 duplicate nonce (previous submission succeeded)
+  \u2022 422 \u2014 proposed price is below the minimum-profit floor`,
+    {
+      productId: z2.number().int().positive().describe("ID of the product to propose a price change for."),
+      proposedPriceGross: z2.number().int().positive().describe(
+        "Proposed gross price in HUF (whole forints, VAT-inclusive). Must be \u2265 the price floor enforced by the server."
+      ),
+      reason: z2.string().min(1).max(500).describe(
+        'Plain-text explanation for the shop owner (1\u2013500 characters). Example: "Piaci minimum 9 100 Ft; 1%-os al\xE1l\xF6v\xE9ssel versenyk\xE9pes".'
+      )
+    },
+    { destructiveHint: false, idempotentHint: false },
+    async (args) => {
+      const nonce = randomUUID();
+      try {
+        const result = await client.proposals.propose({
+          productId: args.productId,
+          proposedPriceGross: args.proposedPriceGross,
+          reason: args.reason,
+          nonce
+        });
+        return ok({
+          id: result.id,
+          status: result.status,
+          createdAt: result.createdAt,
+          note: `Javaslat bek\xFCldve (ID: ${result.id}). Az \xE1r nem v\xE1ltozott \u2014 a bolt tulajdonos\xE1nak j\xF3v\xE1 kell hagynia a Haszno webalkalmaz\xE1sban.`
+        });
+      } catch (e) {
+        return handleApiError(e, "haszno_proposals_propose");
       }
     }
   );
@@ -1980,7 +2181,7 @@ function readHasznoConfig() {
   return {};
 }
 async function main() {
-  const envApiKey = process.env["HASZNO_API_KEY"] ?? process.env["ARFUTAR_API_KEY"];
+  const envApiKey = process.env["HASZNO_API_TOKEN"] ?? process.env["HASZNO_API_KEY"] ?? process.env["ARFUTAR_API_KEY"];
   const envApiUrl = process.env["HASZNO_API_URL"] ?? process.env["ARFUTAR_API_URL"];
   const envBasic = process.env["HASZNO_BASIC"] ?? process.env["ARFUTAR_BASIC"];
   let apiKey = envApiKey;

@@ -49,12 +49,38 @@ claude mcp add haszno -- node ~/.haszno/haszno-mcp/dist/index.js
 
 ---
 
-## Hitelesítés
+## Hitelesítés — kétféle mód
 
-A szerver az alábbi sorrendben olvassa a hitelesítési adatokat:
+A szerver automatikusan választja ki a módot a megadott credential alapján.
 
-1. `HASZNO_API_KEY` / `HASZNO_API_URL` környezeti változók
-2. `ARFUTAR_API_KEY` / `ARFUTAR_API_URL` (csendes visszafelé-kompatibilitás)
+### 1. mód — Bolt-token (ügynök-hozzáférés, `haszno_` előtag)
+
+A bolt-tokenek `haszno_` előtaggal kezdődnek, és az **ügynök-végpontokhoz** adnak
+hozzáférést: termékek olvasása, megrendelések olvasása, javaslatok olvasása és
+**beküldése**. Minden más művelet (beállítások, automatikák, feedek, katalógus, …)
+azonnal hibát ad, HTTP-hívás nélkül.
+
+Bolt-tokent a Haszno webalkalmazásban lehet igényelni: **API-kulcsok**:
+- Hatókörök: `read` (GET) és/vagy `write` (javaslat beküldése)
+- Lejárat: 90 nap; a megújítás emberi jóváhagyást igényel
+- Emberi jóváhagyás kötelező: a bolt tulajdonosának el kell fogadnia minden token-kérelmet
+
+A tokent az **ajánlott** környezeti változóval adja meg:
+
+```bash
+export HASZNO_API_TOKEN=haszno_xxxxxxxxxxxxxxxxxxxx
+```
+
+### 2. mód — Hagyományos API-kulcs (teljes hozzáférés)
+
+Minden `haszno_` előtag nélküli credential (sima API-kulcs, HTTP Basic) `x-api-key`
+vagy `Authorization: Basic` fejlécként kerül továbbításra, pontosan a korábbi módnak
+megfelelően. Minden tool és művelet elérhető.
+
+### Credential feloldási sorrend
+
+1. `HASZNO_API_TOKEN` — bolt-tokenek preferált helye
+2. `HASZNO_API_KEY` / `ARFUTAR_API_KEY` — szintén elfogadott (bolt-token vagy hagyományos)
 3. `~/.config/haszno/config.json` — a CLI `haszno configure` parancsa írja
 4. `~/.config/arfutar/config.json` (csendes visszafelé-kompatibilitás)
 
@@ -80,7 +106,8 @@ haszno_account_configure(apiUrl: "https://haszno.com", apiKey: "haszno_xxxx", co
 | Változó | Leírás |
 |---|---|
 | `HASZNO_API_URL` | A Haszno-példány alap URL-je (alapértelmezett: `https://haszno.com`) |
-| `HASZNO_API_KEY` | API kulcs a hitelesítéshez |
+| `HASZNO_API_TOKEN` | Bolt-token (ajánlott; `haszno_` előtagú tokenekhez) |
+| `HASZNO_API_KEY` | API kulcs — bolt-token vagy hagyományos kulcs |
 
 ---
 
@@ -109,9 +136,10 @@ haszno_account_configure(apiUrl: "https://haszno.com", apiKey: "haszno_xxxx", co
 ### Árajánlatok (`haszno_proposals_*`)
 - `haszno_proposals_list` — javaslatok listája / lapozás
 - `haszno_proposals_market` — javaslat + piaci kontextus
-- `haszno_proposals_approve` — javaslatok jóváhagyása
-- `haszno_proposals_reject` — javaslatok elutasítása
-- `haszno_proposals_rollback` — köteg visszavonása
+- `haszno_proposals_approve` — javaslatok jóváhagyása *(csak hagyományos kulccsal)*
+- `haszno_proposals_reject` — javaslatok elutasítása *(csak hagyományos kulccsal)*
+- `haszno_proposals_rollback` — köteg visszavonása *(csak hagyományos kulccsal)*
+- `haszno_proposals_propose` — új árjavaslat beküldése *(bolt-token + write hatókör)*
 
 ### Automatikák / Szabályok (`haszno_rules_*`, `haszno_automation_*`)
 - `haszno_rules_list_templates` — sablonok

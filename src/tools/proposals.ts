@@ -8,10 +8,11 @@
  *   POST /api/proposals/reject
  *   POST /api/proposals/rollback
  */
+import { randomUUID } from 'node:crypto'
 import { z } from 'zod'
 import type { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js'
 import type { HasznoClient } from '../client/index.js'
-import { HasznoApiError } from '../client/index.js'
+import { HasznoApiError, ShopTokenNotSupportedError } from '../client/index.js'
 
 // ── helpers ──────────────────────────────────────────────────────────────────
 
@@ -35,6 +36,9 @@ function requireConfirm(confirm: boolean | undefined): ReturnType<typeof err> | 
 }
 
 function handleApiError(e: unknown, action: string): ReturnType<typeof err> {
+  if (e instanceof ShopTokenNotSupportedError) {
+    return err(e.message)
+  }
   if (e instanceof HasznoApiError) {
     return err(`API error during ${action}: ${e.message} (status ${e.status})`)
   }
@@ -310,6 +314,83 @@ Returns:
         })
       } catch (e) {
         return handleApiError(e, 'haszno_proposals_reject')
+      }
+    },
+  )
+
+  // ── haszno_proposals_propose ──────────────────────────────────────────────
+  server.tool(
+    'haszno_proposals_propose',
+    `Submit a price-change proposal for human review (shop API token only).
+
+**Requires a shop API token** (starts with "haszno_") sent as Bearer.
+
+Creates a PENDING proposal for the given product. The price is NEVER applied
+automatically — a human must approve it via the Haszno web app.
+
+Constraints:
+  • proposedPriceGross must be ≥ the minimum-profit price floor (cost × (1+VAT)
+    / (1−minMarginPct)). The server enforces this — a price below floor returns 422.
+  • reason must be 1–500 characters of plain text. It is stored verbatim and
+    shown to the shop owner — write clearly why the price change makes sense.
+  • A nonce is generated automatically and reused on transport retries to prevent
+    duplicate proposals. Do not call this tool twice for the same change.
+
+Returns on success:
+  • id — the new proposal's ID
+  • status — always "pending"
+  • createdAt — ISO timestamp
+
+Error codes:
+  • 401 — token invalid, expired, or revoked
+  • 403 — token scope is "read"; needs "write"
+  • 404 — product ID not found (or not in this shop)
+  • 409 — duplicate nonce (previous submission succeeded)
+  • 422 — proposed price is below the minimum-profit floor`,
+    {
+      productId: z
+        .number()
+        .int()
+        .positive()
+        .describe('ID of the product to propose a price change for.'),
+      proposedPriceGross: z
+        .number()
+        .int()
+        .positive()
+        .describe(
+          'Proposed gross price in HUF (whole forints, VAT-inclusive). ' +
+            'Must be ≥ the price floor enforced by the server.',
+        ),
+      reason: z
+        .string()
+        .min(1)
+        .max(500)
+        .describe(
+          'Plain-text explanation for the shop owner (1–500 characters). ' +
+            'Example: "Piaci minimum 9 100 Ft; 1%-os alálövéssel versenyképes".',
+        ),
+    },
+    { destructiveHint: false, idempotentHint: false },
+    async (args) => {
+      // Generate nonce once per tool invocation; retries within request() reuse the same body.
+      const nonce = randomUUID()
+      try {
+        const result = await client.proposals.propose({
+          productId: args.productId,
+          proposedPriceGross: args.proposedPriceGross,
+          reason: args.reason,
+          nonce,
+        })
+        return ok({
+          id: result.id,
+          status: result.status,
+          createdAt: result.createdAt,
+          note:
+            `Javaslat beküldve (ID: ${result.id}). ` +
+            'Az ár nem változott — a bolt tulajdonosának jóvá kell hagynia a Haszno webalkalmazásban.',
+        })
+      } catch (e) {
+        return handleApiError(e, 'haszno_proposals_propose')
       }
     },
   )
