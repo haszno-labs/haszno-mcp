@@ -234,6 +234,21 @@ function createShopTokenClient(opts) {
     blog: {
       list: notSupported("blog.list"),
       get: notSupported("blog.get")
+    },
+    manager: {
+      listReports: () => get("/api/daily-reports", o),
+      getReport: (day) => day === "latest" ? get("/api/agent/daily-report", o) : get(`/api/agent/daily-report/${day}`, o),
+      getResearchBrief: () => get("/api/agent/research-brief", o),
+      postFindings: (day, body) => post(`/api/agent/daily-report/${day}/findings`, body, o),
+      listActions: (params) => {
+        const qs = new URLSearchParams();
+        if (params?.status) qs.set("status", params.status);
+        if (params?.limit != null) qs.set("limit", String(params.limit));
+        const suffix = qs.toString() ? `?${qs.toString()}` : "";
+        return get(`/api/agent/actions${suffix}`, o);
+      },
+      proposeAction: (body) => post("/api/agent/actions", body, o),
+      rejectAction: (id) => post(`/api/agent/actions/${id}/reject`, null, o)
     }
   };
 }
@@ -384,6 +399,23 @@ function createLegacyClient(opts) {
         return get(`/api/blog${suffix}`, o);
       },
       get: (slug) => get(`/api/blog/${slug}`, o)
+    },
+    manager: {
+      listReports: () => get("/api/daily-reports", o),
+      // Agent-facing report routes use /api/agent/ so Bearer tokens bypass the outer
+      // Basic-auth gate on Vercel and authenticate via the per-shop token handler.
+      getReport: (day) => day === "latest" ? get("/api/agent/daily-report", o) : get(`/api/agent/daily-report/${day}`, o),
+      getResearchBrief: () => get("/api/agent/research-brief", o),
+      postFindings: (day, body) => post(`/api/agent/daily-report/${day}/findings`, body, o),
+      listActions: (params) => {
+        const qs = new URLSearchParams();
+        if (params?.status) qs.set("status", params.status);
+        if (params?.limit != null) qs.set("limit", String(params.limit));
+        const suffix = qs.toString() ? `?${qs.toString()}` : "";
+        return get(`/api/agent/actions${suffix}`, o);
+      },
+      proposeAction: (body) => post("/api/agent/actions", body, o),
+      rejectAction: (id) => post(`/api/agent/actions/${id}/reject`, null, o)
     }
   };
 }
@@ -2164,6 +2196,258 @@ function registerBlogTools(server, client) {
   );
 }
 
+// src/tools/manager.ts
+import { z as z12 } from "zod";
+var DAY_REGEX = /^\d{4}-\d{2}-\d{2}$/;
+function isValidDay(day) {
+  if (!DAY_REGEX.test(day)) return false;
+  const d = new Date(day);
+  return !isNaN(d.getTime());
+}
+function isHttpUrl(url) {
+  try {
+    const u = new URL(url);
+    return u.protocol === "http:" || u.protocol === "https:";
+  } catch {
+    return false;
+  }
+}
+var FindingInputSchema = z12.object({
+  kind: z12.enum(["ar_emelkedes", "ar_csokkenes", "trend", "hir", "keszlet", "top_eladas", "lehetoseg"]).describe(
+    "Az elem fajt\xE1ja: ar_emelkedes (\xE1r emelked\xE9s), ar_csokkenes (\xE1r cs\xF6kkenes), trend, hir (piaci h\xEDr), keszlet (k\xE9szlethi\xE1ny), top_eladas, lehetoseg"
+  ),
+  title: z12.string().min(5).max(140).describe("R\xF6vid c\xEDm (5\u2013140 karakter)"),
+  body: z12.string().min(10).max(1200).describe("R\xE9szletes sz\xF6veg (10\u20131200 karakter); plain text, nem HTML"),
+  changePct: z12.number().nullable().optional().describe("Sz\xE1zal\xE9kos v\xE1ltoz\xE1s (pl. 12.5 = +12,5 %; negat\xEDv = cs\xF6kkenes)"),
+  keyword: z12.string().nullable().optional().describe("Kapcsol\xF3d\xF3 term\xE9k/kulcssz\xF3 (opcion\xE1lis)"),
+  productId: z12.number().int().positive().nullable().optional().describe("A bolt term\xE9kazonos\xEDt\xF3ja, ha az elem egy konkr\xE9t term\xE9kre vonatkozik"),
+  sourceName: z12.string().nullable().optional().describe('Forr\xE1s neve (pl. "Reuters", "PS Blog"; opcion\xE1lis)'),
+  sourceUrl: z12.string().nullable().optional().describe("Forr\xE1s URL \u2014 csak http(s) enged\xE9lyezett; opcion\xE1lis"),
+  suggestedAction: z12.union([
+    z12.object({ type: z12.literal("felvetel"), productId: z12.number().int().positive() }),
+    z12.object({ type: z12.literal("levetel"), productId: z12.number().int().positive() }),
+    z12.object({
+      type: z12.literal("ar"),
+      productId: z12.number().int().positive(),
+      priceGross: z12.number().positive()
+    }),
+    z12.object({ type: z12.literal("import"), networkProductId: z12.number().int().positive() })
+  ]).nullable().optional().describe(
+    "Javasolt egykattint\xE1sos m\u0171velet (opcion\xE1lis). A j\xF3v\xE1hagy\xE1s a bolt tulajdonos\xE1\xE9 a Haszno fel\xFClet\xE9n."
+  )
+});
+function registerManagerTools(server, client) {
+  server.registerTool(
+    "haszno_daily_report",
+    {
+      title: "Napi piaci jelent\xE9s lek\xE9r\xE9se",
+      description: 'Visszaadja a bolt napi piaci jelent\xE9s\xE9t. Ha `day` nincs megadva (vagy "latest"), a legut\xF3bbi el\xE9rhet\u0151 nap jelent\xE9se j\xF6n. Ha a list\xE1t k\xE9red (list: true), az utols\xF3 30 nap \xF6sszefoglal\xF3it adja vissza. A jelent\xE9s tartalmaz rendszerb\u0151l gener\xE1lt elemeket (\xE1rv\xE1ltoz\xE1sok, trendel\u0151k, k\xE9szlethi\xE1nyok, top elad\xE1sok, lehet\u0151s\xE9gek) \xE9s agent \xE1ltal bek\xFCld\xF6tt kutat\xE1si eredm\xE9nyeket. Visszat\xE9r: DailyReport (vagy DailyReportSummary[], ha list=true).\n\nMez\u0151k \u2014 DailyReport: { id, day, headline, summary, items[] }.\nMez\u0151k \u2014 ReportItem: { id, origin ("rendszer"|"agent"), kind, title, body, changePct, keyword, productId, productName, sourceName, sourceUrl, suggestedAction, action }.\n\nAz \u201Eaction" mez\u0151 mutatja, ha az elemb\u0151l m\xE1r javaslat keletkezett.\nA j\xF3v\xE1hagy\xE1s \xE9s a visszavon\xE1s a bolt tulajdonos\xE1\xE9 a Haszno fel\xFClet\xE9n.',
+      inputSchema: {
+        day: z12.string().optional().describe(
+          'YYYY-MM-DD form\xE1tum\xFA d\xE1tum, "latest", vagy \xFCresen hagyva = legut\xF3bbi. Ha list=true, ez a param\xE9ter nem \xE9rv\xE9nyes.'
+        ),
+        list: z12.boolean().optional().describe(
+          "true \u2192 az utols\xF3 30 nap r\xF6vid \xF6sszefoglal\xF3it adja vissza (DailyReportSummary[]); false/\xFCresen = teljes napi jelent\xE9s."
+        )
+      },
+      annotations: { readOnlyHint: true }
+    },
+    async (args) => {
+      if (args.list) {
+        const reports = await client.manager.listReports();
+        return { content: [{ type: "text", text: JSON.stringify({ reports }) }] };
+      }
+      const day = args.day ?? "latest";
+      if (day !== "latest" && !isValidDay(day)) {
+        return {
+          content: [{
+            type: "text",
+            text: JSON.stringify({ error: `\xC9rv\xE9nytelen d\xE1tum form\xE1tum: "${day}". Haszn\xE1lj YYYY-MM-DD-t.` })
+          }]
+        };
+      }
+      const report = await client.manager.getReport(day);
+      if (report === null) {
+        return {
+          content: [{
+            type: "text",
+            text: JSON.stringify({ report: null, message: "Ehhez a naphoz m\xE9g nem k\xE9sz\xFClt jelent\xE9s." })
+          }]
+        };
+      }
+      return { content: [{ type: "text", text: JSON.stringify({ report }) }] };
+    }
+  );
+  server.registerTool(
+    "haszno_research_brief",
+    {
+      title: "Kutat\xE1si brief lek\xE9r\xE9se",
+      description: "Visszaadja a mai napra vonatkoz\xF3 kutat\xE1si briefet, amit az AI \xFCgyn\xF6k felhaszn\xE1l a napi piaci kutat\xE1shoz. A brief tartalmazza: a bolt aktu\xE1lis f\xF3kuszkeyword-jeit \xE9s term\xE9keit \xE1rral \xE9s trend-jelz\u0151kkel, Magyar nyelv\u0171 kutat\xE1si k\xE9rd\xE9seket, \xE9s azt az URL-t, ahov\xE1 a kutat\xE1si eredm\xE9nyeket be kell k\xFCldeni (postTo).\n\nWorkflow: (1) h\xEDvd meg ezt az eszk\xF6zt a brief lek\xE9r\xE9s\xE9hez, (2) v\xE9gezz piaci kutat\xE1st a shopFocus \xE9s questions alapj\xE1n, (3) k\xFCldd be az eredm\xE9nyeket a haszno_post_findings eszk\xF6zzel a postTo URL napj\xE1ra.\n\nVisszat\xE9r: ResearchBrief { day, shopFocus[], questions[], postTo }.",
+      inputSchema: {},
+      annotations: { readOnlyHint: true }
+    },
+    async () => {
+      const brief = await client.manager.getResearchBrief();
+      return { content: [{ type: "text", text: JSON.stringify(brief) }] };
+    }
+  );
+  server.registerTool(
+    "haszno_post_findings",
+    {
+      title: "Kutat\xE1si eredm\xE9nyek bek\xFCld\xE9se",
+      description: "Az AI \xFCgyn\xF6k ezzel az eszk\xF6zzel adja hozz\xE1 a napi piaci kutat\xE1s eredm\xE9nyeit a jelent\xE9shez. Az elemek origin='agent'-k\xE9nt ker\xFClnek a napi jelent\xE9sbe, \xE9s a bolt tulajdonosa l\xE1tja \u0151ket.\n\nA `day` csak a mai vagy a tegnapi nap (UTC) lehet.\nEgyszerre legfeljebb 20 elem k\xFCldhet\u0151 be; naponta \xF6sszesen max. 60 agent-elem enged\xE9lyezett egy napon.\n\nMez\u0151k valid\xE1l\xE1sa:\n- title: 5\u2013140 karakter\n- body: 10\u20131200 karakter (plain text, nem HTML)\n- sourceUrl: csak http(s) enged\xE9lyezett\n- suggestedAction: felvetel/levetel/ar/import \u2014 a j\xF3v\xE1hagy\xE1s mindig a bolt tulajdonos\xE1\xE9 a Haszno fel\xFClet\xE9n\n\nVisszat\xE9r: a friss\xEDtett DailyReport.",
+      inputSchema: {
+        day: z12.string().describe("A nap YYYY-MM-DD form\xE1tumban. Csak mai vagy tegnapi nap (UTC) fogadhat\xF3 el."),
+        headline: z12.string().max(140).optional().describe("A nap r\xF6vid \xF6sszefoglal\xF3ja (opcion\xE1lis, max. 140 karakter)"),
+        summary: z12.string().max(800).optional().describe("Hosszabb \xF6sszefoglal\xF3 sz\xF6veg (opcion\xE1lis, max. 800 karakter)"),
+        items: z12.array(FindingInputSchema).min(1).max(20).describe("A kutat\xE1si eredm\xE9nyek list\xE1ja (1\u201320 elem)")
+      },
+      annotations: { readOnlyHint: false, destructiveHint: false, idempotentHint: false }
+    },
+    async (args) => {
+      if (!isValidDay(args.day)) {
+        return {
+          content: [{
+            type: "text",
+            text: JSON.stringify({
+              error: `\xC9rv\xE9nytelen d\xE1tum form\xE1tum: "${args.day}". Haszn\xE1lj YYYY-MM-DD-t.`
+            })
+          }]
+        };
+      }
+      for (const item of args.items) {
+        if (item.sourceUrl && !isHttpUrl(item.sourceUrl)) {
+          return {
+            content: [{
+              type: "text",
+              text: JSON.stringify({
+                error: `\xC9rv\xE9nytelen sourceUrl: "${item.sourceUrl}". Csak http(s) enged\xE9lyezett.`
+              })
+            }]
+          };
+        }
+      }
+      const body = {
+        ...args.headline != null ? { headline: args.headline } : {},
+        ...args.summary != null ? { summary: args.summary } : {},
+        items: args.items
+      };
+      const report = await client.manager.postFindings(args.day, body);
+      return { content: [{ type: "text", text: JSON.stringify({ report }) }] };
+    }
+  );
+  server.registerTool(
+    "haszno_list_actions",
+    {
+      title: "Agent-m\u0171veletek list\xE1z\xE1sa",
+      description: "Visszaadja a bolt agent-m\u0171veleteinek list\xE1j\xE1t (javasolt, v\xE9grehajtott, visszavont, hiba st\xE1tuszban l\xE9v\u0151k). Sz\u0171rhet\u0151 st\xE1tusz szerint; alap\xE9rtelmezett limit: 50, maximum: 200.\n\nVisszat\xE9r: AgentAction[] (leg\xFAjabbt\xF3l a legr\xE9gebbi fel\xE9).\n\nMez\u0151k \u2014 AgentAction: { id, action, reason, status, origin, autoApproved, reportItemId, target { name, sku, imageUrl }, preview { oldPriceGross, newPriceGross, floorGross, marginPct }, error, canUndo, createdAt, decidedAt, executedAt }.\n\nSt\xE1tuszok: javasolt | vegrehajtva | elutasitva | hiba | visszavonva.\nA j\xF3v\xE1hagy\xE1s \xE9s a visszavon\xE1s a bolt tulajdonos\xE1\xE9 a Haszno fel\xFClet\xE9n.",
+      inputSchema: {
+        status: z12.enum(["javasolt", "vegrehajtva", "elutasitva", "hiba", "visszavonva"]).optional().describe("Sz\u0171r\xE9s st\xE1tusz szerint (opcion\xE1lis; \xFCresen = minden st\xE1tusz)"),
+        limit: z12.number().int().min(1).max(200).optional().describe("Visszaadott elemek sz\xE1ma (alap\xE9rtelmezett: 50, max: 200)")
+      },
+      annotations: { readOnlyHint: true }
+    },
+    async (args) => {
+      const actions = await client.manager.listActions({
+        status: args.status,
+        limit: args.limit
+      });
+      return {
+        content: [{
+          type: "text",
+          text: JSON.stringify({ actions, count: actions.length })
+        }]
+      };
+    }
+  );
+  server.registerTool(
+    "haszno_propose_action",
+    {
+      title: "Agent-m\u0171velet javaslata",
+      description: 'Az AI \xFCgyn\xF6k ezzel az eszk\xF6zzel javasol egy m\u0171veletet a bolt tulajdonos\xE1nak. A javasolt m\u0171velet NEM hajt\xF3dik v\xE9gre azonnal \u2014 a bolt tulajdonos\xE1 er\u0151s\xEDti meg vagy utas\xEDtja el a Haszno fel\xFClet\xE9n.\n\nKiv\xE9tel: ha az autopilot be van kapcsolva \xE9s a m\u0171velet t\xEDpusa enged\xE9lyezett az automatikus v\xE9grehajt\xE1shoz, a szerver esetleg azonnal v\xE9grehajtja \u2014 ez a Haszno autopilot be\xE1ll\xEDt\xE1sait\xF3l f\xFCgg, nem az \xFCgyn\xF6k d\xF6nt\xE9se.\n\nM\u0171velett\xEDpusok:\n- felvetel: katal\xF3gusterm\xE9k felt\xFCntet\xE9se a boltban\n- levetel: term\xE9k lev\xE9tele a boltb\xF3l\n- ar: term\xE9k \xE1r\xE1nak m\xF3dos\xEDt\xE1sa (az abszol\xFAt \xE1r-padl\xF3t a szerver ellen\u0151rzi;   ismeretlen beker\xFCl\xE9si \xE1r\xFA term\xE9k nem \xE1razhat\xF3 \xFAjra agenttel)\n- import: h\xE1l\xF3zati term\xE9k importlist\xE1ra t\xE9tele\n\nVisszat\xE9r: AgentAction (status: "javasolt" vagy esetleg "vegrehajtva" ha az autopilot azonnal futtatta).\n\nFONTOS: a j\xF3v\xE1hagy\xE1s a bolt tulajdonos\xE1\xE9 a Haszno fel\xFClet\xE9n. Az \xFCgyn\xF6k nem hagyhat j\xF3v\xE1 saj\xE1t maga \xE1ltal javasolt m\u0171veletet.',
+      inputSchema: {
+        type: z12.enum(["felvetel", "levetel", "ar", "import"]).describe("M\u0171velett\xEDpus"),
+        productId: z12.number().int().positive().optional().describe(
+          "A bolt term\xE9kazonos\xEDt\xF3ja (k\xF6telez\u0151: felvetel, levetel, ar t\xEDpusokn\xE1l)"
+        ),
+        networkProductId: z12.number().int().positive().optional().describe("H\xE1l\xF3zati term\xE9kazonos\xEDt\xF3 (k\xF6telez\u0151: import t\xEDpusn\xE1l)"),
+        priceGross: z12.number().positive().optional().describe(
+          "Javasolt brutt\xF3 \xE1r forintban (k\xF6telez\u0151: ar t\xEDpusn\xE1l). A szerver ellen\u0151rzi, hogy >= az abszol\xFAt \xE1r-padl\xF3nak."
+        ),
+        reason: z12.string().min(5).max(500).describe("Mi\xE9rt javasolja az \xFCgyn\xF6k ezt a m\u0171veletet? (5\u2013500 karakter)"),
+        reportItemId: z12.number().int().positive().optional().describe("Ha a javaslat egy napi jelent\xE9s elem\xE9b\u0151l ered, az elem azonos\xEDt\xF3ja")
+      },
+      annotations: { readOnlyHint: false, destructiveHint: false, idempotentHint: false }
+    },
+    async (args) => {
+      let actionInput;
+      if (args.type === "felvetel") {
+        if (args.productId == null) {
+          return {
+            content: [{
+              type: "text",
+              text: JSON.stringify({ error: "felvetel t\xEDpushoz productId k\xF6telez\u0151." })
+            }]
+          };
+        }
+        actionInput = { type: "felvetel", productId: args.productId };
+      } else if (args.type === "levetel") {
+        if (args.productId == null) {
+          return {
+            content: [{
+              type: "text",
+              text: JSON.stringify({ error: "levetel t\xEDpushoz productId k\xF6telez\u0151." })
+            }]
+          };
+        }
+        actionInput = { type: "levetel", productId: args.productId };
+      } else if (args.type === "ar") {
+        if (args.productId == null || args.priceGross == null) {
+          return {
+            content: [{
+              type: "text",
+              text: JSON.stringify({ error: "ar t\xEDpushoz productId \xE9s priceGross k\xF6telez\u0151." })
+            }]
+          };
+        }
+        actionInput = { type: "ar", productId: args.productId, priceGross: args.priceGross };
+      } else {
+        if (args.networkProductId == null) {
+          return {
+            content: [{
+              type: "text",
+              text: JSON.stringify({ error: "import t\xEDpushoz networkProductId k\xF6telez\u0151." })
+            }]
+          };
+        }
+        actionInput = { type: "import", networkProductId: args.networkProductId };
+      }
+      const body = {
+        ...actionInput,
+        reason: args.reason,
+        ...args.reportItemId != null ? { reportItemId: args.reportItemId } : {}
+      };
+      const action = await client.manager.proposeAction(body);
+      return { content: [{ type: "text", text: JSON.stringify({ action }) }] };
+    }
+  );
+  server.registerTool(
+    "haszno_withdraw_action",
+    {
+      title: "Agent-javaslat visszavon\xE1sa",
+      description: 'Az AI \xFCgyn\xF6k ezzel az eszk\xF6zzel vonja vissza a saj\xE1t maga \xE1ltal javasolt, m\xE9g j\xF3v\xE1 nem hagyott m\u0171veletet. Csak "javasolt" st\xE1tusz\xFA, az \xFCgyn\xF6k \xE1ltal l\xE9trehozott m\u0171veleten m\u0171k\xF6dik.\n\nFONTOS: a j\xF3v\xE1hagy\xE1s \xE9s az emberi d\xF6nt\xE9s a bolt tulajdonos\xE1\xE9 a Haszno fel\xFClet\xE9n \u2014 ez az eszk\xF6z kiz\xE1r\xF3lag az \xFCgyn\xF6k saj\xE1t javaslatainak visszavon\xE1s\xE1ra szolg\xE1l (pl. ha a javaslat elavult vagy hib\xE1s volt).\n\nVisszat\xE9r: a friss\xEDtett AgentAction (status: "visszavonva").',
+      inputSchema: {
+        id: z12.number().int().positive().describe("A visszavonand\xF3 agent-javaslat azonos\xEDt\xF3ja")
+      },
+      annotations: { readOnlyHint: false, destructiveHint: false, idempotentHint: false }
+    },
+    async (args) => {
+      const action = await client.manager.rejectAction(args.id);
+      return { content: [{ type: "text", text: JSON.stringify({ action }) }] };
+    }
+  );
+}
+
 // src/index.ts
 function readHasznoConfig() {
   const candidates = [
@@ -2210,6 +2494,7 @@ async function main() {
   registerConnectionsTools(server, client);
   registerPeersTools(server, client);
   registerBlogTools(server, client);
+  registerManagerTools(server, client);
   const transport = new StdioServerTransport();
   await server.connect(transport);
 }

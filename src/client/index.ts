@@ -417,6 +417,25 @@ function createShopTokenClient(opts: HttpOptions): HasznoClient {
       list: notSupported('blog.list'),
       get: notSupported('blog.get'),
     },
+
+    manager: {
+      listReports: () => get('/api/daily-reports', o),
+      getReport: (day) =>
+        day === 'latest'
+          ? get('/api/agent/daily-report', o)
+          : get(`/api/agent/daily-report/${day}`, o),
+      getResearchBrief: () => get('/api/agent/research-brief', o),
+      postFindings: (day, body) => post(`/api/agent/daily-report/${day}/findings`, body, o),
+      listActions: (params) => {
+        const qs = new URLSearchParams()
+        if (params?.status) qs.set('status', params.status)
+        if (params?.limit != null) qs.set('limit', String(params.limit))
+        const suffix = qs.toString() ? `?${qs.toString()}` : ''
+        return get(`/api/agent/actions${suffix}`, o)
+      },
+      proposeAction: (body) => post('/api/agent/actions', body, o),
+      rejectAction: (id) => post(`/api/agent/actions/${id}/reject`, null, o),
+    },
   }
 }
 
