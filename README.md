@@ -136,6 +136,57 @@ haszno_account_configure(apiUrl: "https://haszno.com", apiKey: "haszno_xxxx", co
 - `haszno_ideas_ai_description` — AI product description generator
 - `haszno_ideas_fill_keywords` — fill missing trend keywords
 
+### Daily market report + agent actions (`haszno_daily_report`, `haszno_research_brief`, `haszno_post_findings`, `haszno_list_actions`, `haszno_propose_action`)
+
+| Tool | Description |
+|---|---|
+| `haszno_daily_report` | Get the daily market report (latest or by date). Set `list: true` for a summary of the last 30 days. Read-only. |
+| `haszno_research_brief` | Get today's research brief: shop focus keywords/products with prices and trend indicators, Hungarian research questions, and the `postTo` URL to deliver findings. Read-only. |
+| `haszno_post_findings` | Post research findings for today (or yesterday). Items are added to the report as `origin: 'agent'`. Max 20 items per call, 60 per day. |
+| `haszno_list_actions` | List proposed and executed agent actions. Filter by status. Read-only. |
+| `haszno_propose_action` | Propose an action (felvetel/levetel/ar/import) for the shop owner to review. The price floor is enforced by the server; approve/undo are always the shop owner's decision in the Haszno UI. |
+
+> **Approve and undo are intentionally NOT tools** — they require human decision-making and are handled by the shop owner in the Haszno interface.
+
+#### Napi kutatás — example workflow
+
+```
+// 1. Get the research brief for today
+haszno_research_brief()
+// → { day: "2026-11-12", shopFocus: [...], questions: [...], postTo: "/api/daily-reports/2026-11-12/findings" }
+
+// 2. Research the market based on shopFocus and questions
+// (search the web, check supplier news, etc.)
+
+// 3. Post findings
+haszno_post_findings({
+  day: "2026-11-12",
+  headline: "PS5 Pro ára 10%-ot emelkedett",
+  items: [
+    {
+      kind: "hir",
+      title: "PS5 Pro ára emelkedett",
+      body: "A Sony bejelentette, hogy a PS5 Pro ajánlott kiskereskedelmi ára 10%-ot emelkedik 2026 decemberétől.",
+      changePct: 10.0,
+      keyword: "PS5 Pro",
+      sourceName: "Sony Newsroom",
+      sourceUrl: "https://blog.sony.com/ps5pro-price",
+      suggestedAction: { type: "ar", productId: 42, priceGross: 269990 }
+    }
+  ]
+})
+// → Updated DailyReport (the shop owner sees the item and the suggested price action)
+
+// 4. Optionally propose additional actions
+haszno_propose_action({
+  type: "ar",
+  productId: 42,
+  priceGross: 269990,
+  reason: "Sony announced a 10% RRP increase; market minimum already rising."
+})
+// → AgentAction { status: "javasolt" } — waiting for the owner to approve
+```
+
 ---
 
 ## Development

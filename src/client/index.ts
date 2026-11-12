@@ -190,6 +190,7 @@ export interface HasznoClient {
     postFindings(day: string, body: FindingsInput): Promise<DailyReport>
     listActions(params?: { status?: ActionStatus; limit?: number }): Promise<AgentAction[]>
     proposeAction(body: ActionInput & { reason: string; reportItemId?: number }): Promise<AgentAction>
+    rejectAction(id: number): Promise<AgentAction>
   }
 }
 
@@ -375,6 +376,7 @@ export function createClient(opts: HttpOptions = {}): HasznoClient {
         return get(`/api/agent/actions${suffix}`, o)
       },
       proposeAction: (body) => post('/api/agent/actions', body, o),
+      rejectAction: (id) => post(`/api/agent/actions/${id}/reject`, null, o),
     },
   }
 }

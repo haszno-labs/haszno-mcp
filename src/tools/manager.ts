@@ -446,4 +446,32 @@ export function registerManagerTools(server: McpServer, client: HasznoClient): v
       return { content: [{ type: 'text' as const, text: JSON.stringify({ action }) }] }
     },
   )
+
+  // ---- haszno_withdraw_action -----------------------------------------------------
+  server.registerTool(
+    'haszno_withdraw_action',
+    {
+      title: 'Agent-javaslat visszavonása',
+      description:
+        'Az AI ügynök ezzel az eszközzel vonja vissza a saját maga által javasolt, ' +
+        'még jóvá nem hagyott műveletet. Csak "javasolt" státuszú, az ügynök által ' +
+        'létrehozott műveleten működik.\n\n' +
+        'FONTOS: a jóváhagyás és az emberi döntés a bolt tulajdonosáé a Haszno ' +
+        'felületén — ez az eszköz kizárólag az ügynök saját javaslatainak visszavonására ' +
+        'szolgál (pl. ha a javaslat elavult vagy hibás volt).\n\n' +
+        'Visszatér: a frissített AgentAction (status: "visszavonva").',
+      inputSchema: {
+        id: z
+          .number()
+          .int()
+          .positive()
+          .describe('A visszavonandó agent-javaslat azonosítója'),
+      },
+      annotations: { readOnlyHint: false, destructiveHint: false, idempotentHint: false },
+    },
+    async (args) => {
+      const action = await client.manager.rejectAction(args.id)
+      return { content: [{ type: 'text' as const, text: JSON.stringify({ action }) }] }
+    },
+  )
 }
