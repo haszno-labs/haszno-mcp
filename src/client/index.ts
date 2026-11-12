@@ -117,6 +117,29 @@ export class ShopTokenNotSupportedError extends Error {
   }
 }
 
+/**
+ * Thrown when a legacy API key calls a manager (Napi jelentés / agent-actions) operation.
+ * These endpoints require a shop token (haszno_… prefix) sent as Bearer.
+ * Without a shop token the server either returns synthetic demo data (GET /api/agent/actions)
+ * or 401 for all other manager routes — both are wrong for a production agent.
+ * Zero HTTP calls are made when this error is thrown.
+ */
+export class LegacyKeyNotSupportedError extends Error {
+  readonly isLegacyKeyNotSupported = true
+  readonly operation: string
+
+  constructor(operation: string) {
+    super(
+      `"${operation}" csak bolt API-tokennel (haszno_…) érhető el — ` +
+        'a Napi jelentés és agent-eszközök nem működnek sima API-kulccsal. ' +
+        'Hozzon létre bolt API-tokent itt: /app/api-kulcsok (Haszno webalkalmazás). ' +
+        'Shop token required: create one at /app/api-kulcsok in the Haszno web app.',
+    )
+    this.name = 'LegacyKeyNotSupportedError'
+    this.operation = operation
+  }
+}
+
 // ── Client interface ───────────────────────────────────────────────────────────
 
 export interface HasznoClient {
@@ -281,6 +304,13 @@ function detectShopToken(opts: HttpOptions): string | undefined {
 function notSupported(op: string): (..._args: unknown[]) => Promise<never> {
   return (..._args: unknown[]): Promise<never> => {
     return Promise.reject(new ShopTokenNotSupportedError(op))
+  }
+}
+
+/** Returns a function that rejects — legacy key cannot call manager endpoints. */
+function notSupportedLegacy(op: string): (..._args: unknown[]) => Promise<never> {
+  return (..._args: unknown[]): Promise<never> => {
+    return Promise.reject(new LegacyKeyNotSupportedError(op))
   }
 }
 
@@ -609,25 +639,17 @@ function createLegacyClient(opts: HttpOptions): HasznoClient {
       get: (slug) => get(`/api/blog/${slug}`, o),
     },
 
+    // manager.* requires a shop token (haszno_…). In legacy mode these endpoints
+    // either return synthetic demo data (GET /api/agent/actions → HTTP 200 with
+    // fake rows) or 401. Both outcomes are wrong for a production agent.
     manager: {
-      listReports: () => get('/api/daily-reports', o),
-      // Agent-facing report routes use /api/agent/ so Bearer tokens bypass the outer
-      // Basic-auth gate on Vercel and authenticate via the per-shop token handler.
-      getReport: (day) =>
-        day === 'latest'
-          ? get('/api/agent/daily-report', o)
-          : get(`/api/agent/daily-report/${day}`, o),
-      getResearchBrief: () => get('/api/agent/research-brief', o),
-      postFindings: (day, body) => post(`/api/agent/daily-report/${day}/findings`, body, o),
-      listActions: (params) => {
-        const qs = new URLSearchParams()
-        if (params?.status) qs.set('status', params.status)
-        if (params?.limit != null) qs.set('limit', String(params.limit))
-        const suffix = qs.toString() ? `?${qs.toString()}` : ''
-        return get(`/api/agent/actions${suffix}`, o)
-      },
-      proposeAction: (body) => post('/api/agent/actions', body, o),
-      rejectAction: (id) => post(`/api/agent/actions/${id}/reject`, null, o),
+      listReports: notSupportedLegacy('manager.listReports'),
+      getReport: notSupportedLegacy('manager.getReport'),
+      getResearchBrief: notSupportedLegacy('manager.getResearchBrief'),
+      postFindings: notSupportedLegacy('manager.postFindings'),
+      listActions: notSupportedLegacy('manager.listActions'),
+      proposeAction: notSupportedLegacy('manager.proposeAction'),
+      rejectAction: notSupportedLegacy('manager.rejectAction'),
     },
   }
 }

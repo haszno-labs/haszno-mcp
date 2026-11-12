@@ -167,6 +167,8 @@ haszno_account_configure(apiUrl: "https://haszno.com", apiKey: "haszno_xxxx", co
 
 ### Daily market report + agent actions (`haszno_daily_report`, `haszno_research_brief`, `haszno_post_findings`, `haszno_list_actions`, `haszno_propose_action`)
 
+> **Requires a shop token** (`haszno_…`): these tools call the agent API (`/api/agent/*`) and do not work with a legacy API key — create a shop token at `/app/api-kulcsok` in the Haszno web app.
+
 | Tool | Description |
 |---|---|
 | `haszno_daily_report` | Get the daily market report (latest or by date). Set `list: true` for a summary of the last 30 days. Read-only. |

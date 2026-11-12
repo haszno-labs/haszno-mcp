@@ -118,6 +118,17 @@ var ShopTokenNotSupportedError = class extends Error {
     this.operation = operation;
   }
 };
+var LegacyKeyNotSupportedError = class extends Error {
+  isLegacyKeyNotSupported = true;
+  operation;
+  constructor(operation) {
+    super(
+      `"${operation}" csak bolt API-tokennel (haszno_\u2026) \xE9rhet\u0151 el \u2014 a Napi jelent\xE9s \xE9s agent-eszk\xF6z\xF6k nem m\u0171k\xF6dnek sima API-kulccsal. Hozzon l\xE9tre bolt API-tokent itt: /app/api-kulcsok (Haszno webalkalmaz\xE1s). Shop token required: create one at /app/api-kulcsok in the Haszno web app.`
+    );
+    this.name = "LegacyKeyNotSupportedError";
+    this.operation = operation;
+  }
+};
 function detectShopToken(opts) {
   const key = opts.apiKey ?? process.env["HASZNO_API_TOKEN"] ?? process.env["HASZNO_API_KEY"] ?? process.env["ARFUTAR_API_KEY"];
   return isShopToken(key) ? key : void 0;
@@ -125,6 +136,11 @@ function detectShopToken(opts) {
 function notSupported(op) {
   return (..._args) => {
     return Promise.reject(new ShopTokenNotSupportedError(op));
+  };
+}
+function notSupportedLegacy(op) {
+  return (..._args) => {
+    return Promise.reject(new LegacyKeyNotSupportedError(op));
   };
 }
 function createClient(opts = {}) {
@@ -400,22 +416,17 @@ function createLegacyClient(opts) {
       },
       get: (slug) => get(`/api/blog/${slug}`, o)
     },
+    // manager.* requires a shop token (haszno_…). In legacy mode these endpoints
+    // either return synthetic demo data (GET /api/agent/actions → HTTP 200 with
+    // fake rows) or 401. Both outcomes are wrong for a production agent.
     manager: {
-      listReports: () => get("/api/daily-reports", o),
-      // Agent-facing report routes use /api/agent/ so Bearer tokens bypass the outer
-      // Basic-auth gate on Vercel and authenticate via the per-shop token handler.
-      getReport: (day) => day === "latest" ? get("/api/agent/daily-report", o) : get(`/api/agent/daily-report/${day}`, o),
-      getResearchBrief: () => get("/api/agent/research-brief", o),
-      postFindings: (day, body) => post(`/api/agent/daily-report/${day}/findings`, body, o),
-      listActions: (params) => {
-        const qs = new URLSearchParams();
-        if (params?.status) qs.set("status", params.status);
-        if (params?.limit != null) qs.set("limit", String(params.limit));
-        const suffix = qs.toString() ? `?${qs.toString()}` : "";
-        return get(`/api/agent/actions${suffix}`, o);
-      },
-      proposeAction: (body) => post("/api/agent/actions", body, o),
-      rejectAction: (id) => post(`/api/agent/actions/${id}/reject`, null, o)
+      listReports: notSupportedLegacy("manager.listReports"),
+      getReport: notSupportedLegacy("manager.getReport"),
+      getResearchBrief: notSupportedLegacy("manager.getResearchBrief"),
+      postFindings: notSupportedLegacy("manager.postFindings"),
+      listActions: notSupportedLegacy("manager.listActions"),
+      proposeAction: notSupportedLegacy("manager.proposeAction"),
+      rejectAction: notSupportedLegacy("manager.rejectAction")
     }
   };
 }
@@ -2229,7 +2240,7 @@ var FindingInputSchema = z12.object({
     z12.object({
       type: z12.literal("ar"),
       productId: z12.number().int().positive(),
-      priceGross: z12.number().positive()
+      priceGross: z12.number().int().positive().describe("eg\xE9sz sz\xE1m (Ft)")
     }),
     z12.object({ type: z12.literal("import"), networkProductId: z12.number().int().positive() })
   ]).nullable().optional().describe(
@@ -2371,8 +2382,8 @@ function registerManagerTools(server, client) {
           "A bolt term\xE9kazonos\xEDt\xF3ja (k\xF6telez\u0151: felvetel, levetel, ar t\xEDpusokn\xE1l)"
         ),
         networkProductId: z12.number().int().positive().optional().describe("H\xE1l\xF3zati term\xE9kazonos\xEDt\xF3 (k\xF6telez\u0151: import t\xEDpusn\xE1l)"),
-        priceGross: z12.number().positive().optional().describe(
-          "Javasolt brutt\xF3 \xE1r forintban (k\xF6telez\u0151: ar t\xEDpusn\xE1l). A szerver ellen\u0151rzi, hogy >= az abszol\xFAt \xE1r-padl\xF3nak."
+        priceGross: z12.number().int().positive().optional().describe(
+          "Javasolt brutt\xF3 \xE1r eg\xE9sz sz\xE1m (Ft), k\xF6telez\u0151 ar t\xEDpusn\xE1l. A szerver ellen\u0151rzi, hogy >= az abszol\xFAt \xE1r-padl\xF3nak."
         ),
         reason: z12.string().min(5).max(500).describe("Mi\xE9rt javasolja az \xFCgyn\xF6k ezt a m\u0171veletet? (5\u2013500 karakter)"),
         reportItemId: z12.number().int().positive().optional().describe("Ha a javaslat egy napi jelent\xE9s elem\xE9b\u0151l ered, az elem azonos\xEDt\xF3ja")

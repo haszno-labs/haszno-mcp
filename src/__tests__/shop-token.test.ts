@@ -14,7 +14,7 @@
  */
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
 import { request, isShopToken, SHOP_TOKEN_PREFIX } from '../client/http.js'
-import { createClient, ShopTokenNotSupportedError } from '../client/index.js'
+import { createClient, ShopTokenNotSupportedError, LegacyKeyNotSupportedError } from '../client/index.js'
 
 // ── Helpers ───────────────────────────────────────────────────────────────────
 
@@ -341,5 +341,143 @@ describe('error mapping in shop-token mode', () => {
     const client = createClient({ apiKey: SHOP_TOKEN, fetch: fn as typeof fetch, maxRetries: 2, retryDelayMs: 0 })
     await expect(client.products.list()).rejects.toMatchObject({ status: 429 })
     expect(fn).toHaveBeenCalledTimes(2)
+  })
+})
+
+// ── manager namespace — HTTP contract (shop-token mode) ───────────────────────
+
+describe('createClient() — manager methods HTTP contract (shop-token mode)', () => {
+  const saved = { ...process.env }
+  beforeEach(() => {
+    for (const k of ['HASZNO_API_TOKEN', 'HASZNO_API_KEY', 'ARFUTAR_API_KEY']) delete process.env[k]
+  })
+  afterEach(() => {
+    Object.assign(process.env, saved)
+    for (const k of Object.keys(process.env)) {
+      if (!(k in saved)) delete process.env[k]
+    }
+  })
+
+  it('manager.listReports() → GET /api/daily-reports, Bearer', async () => {
+    const { fn, calls } = makeFetch(200, [])
+    const client = createClient({ apiKey: SHOP_TOKEN, fetch: fn as typeof fetch })
+    await client.manager.listReports()
+    expect(calls).toHaveLength(1)
+    expect(calls[0].init.method).toBe('GET')
+    expect(calls[0].url).toContain('/api/daily-reports')
+    expect((calls[0].init.headers as Record<string, string>)['Authorization']).toBe(`Bearer ${SHOP_TOKEN}`)
+  })
+
+  it('manager.getReport("latest") → GET /api/agent/daily-report, Bearer', async () => {
+    const { fn, calls } = makeFetch(200, { id: 1 })
+    const client = createClient({ apiKey: SHOP_TOKEN, fetch: fn as typeof fetch })
+    await client.manager.getReport('latest')
+    expect(calls[0].init.method).toBe('GET')
+    expect(calls[0].url).toMatch(/\/api\/agent\/daily-report$/)
+    expect((calls[0].init.headers as Record<string, string>)['Authorization']).toBe(`Bearer ${SHOP_TOKEN}`)
+  })
+
+  it('manager.getReport("2026-11-12") → GET /api/agent/daily-report/2026-11-12, Bearer', async () => {
+    const { fn, calls } = makeFetch(200, { id: 1 })
+    const client = createClient({ apiKey: SHOP_TOKEN, fetch: fn as typeof fetch })
+    await client.manager.getReport('2026-11-12')
+    expect(calls[0].init.method).toBe('GET')
+    expect(calls[0].url).toContain('/api/agent/daily-report/2026-11-12')
+    expect((calls[0].init.headers as Record<string, string>)['Authorization']).toBe(`Bearer ${SHOP_TOKEN}`)
+  })
+
+  it('manager.getResearchBrief() → GET /api/agent/research-brief, Bearer', async () => {
+    const { fn, calls } = makeFetch(200, { day: '2026-11-12' })
+    const client = createClient({ apiKey: SHOP_TOKEN, fetch: fn as typeof fetch })
+    await client.manager.getResearchBrief()
+    expect(calls[0].init.method).toBe('GET')
+    expect(calls[0].url).toContain('/api/agent/research-brief')
+    expect((calls[0].init.headers as Record<string, string>)['Authorization']).toBe(`Bearer ${SHOP_TOKEN}`)
+  })
+
+  it('manager.postFindings() → POST /api/agent/daily-report/:day/findings, Bearer, JSON body', async () => {
+    const body = { headline: 'Teszt', items: [] }
+    const { fn, calls } = makeFetch(200, { id: 1 })
+    const client = createClient({ apiKey: SHOP_TOKEN, fetch: fn as typeof fetch })
+    await client.manager.postFindings('2026-11-12', body)
+    expect(calls[0].init.method).toBe('POST')
+    expect(calls[0].url).toContain('/api/agent/daily-report/2026-11-12/findings')
+    expect((calls[0].init.headers as Record<string, string>)['Authorization']).toBe(`Bearer ${SHOP_TOKEN}`)
+    expect(JSON.parse(calls[0].init.body as string).headline).toBe('Teszt')
+  })
+
+  it('manager.listActions() → GET /api/agent/actions (no query string), Bearer', async () => {
+    const { fn, calls } = makeFetch(200, [])
+    const client = createClient({ apiKey: SHOP_TOKEN, fetch: fn as typeof fetch })
+    await client.manager.listActions()
+    expect(calls[0].init.method).toBe('GET')
+    expect(calls[0].url).toMatch(/\/api\/agent\/actions$/)
+    expect((calls[0].init.headers as Record<string, string>)['Authorization']).toBe(`Bearer ${SHOP_TOKEN}`)
+  })
+
+  it('manager.listActions({ status, limit }) → GET /api/agent/actions?status=javasolt&limit=10, Bearer', async () => {
+    const { fn, calls } = makeFetch(200, [])
+    const client = createClient({ apiKey: SHOP_TOKEN, fetch: fn as typeof fetch })
+    await client.manager.listActions({ status: 'javasolt', limit: 10 })
+    expect(calls[0].init.method).toBe('GET')
+    expect(calls[0].url).toContain('/api/agent/actions?status=javasolt&limit=10')
+    expect((calls[0].init.headers as Record<string, string>)['Authorization']).toBe(`Bearer ${SHOP_TOKEN}`)
+  })
+
+  it('manager.proposeAction() → POST /api/agent/actions, Bearer, JSON body', async () => {
+    const body = { type: 'felvetel' as const, productId: 42, reason: 'Jó termék' }
+    const { fn, calls } = makeFetch(200, { id: 1 })
+    const client = createClient({ apiKey: SHOP_TOKEN, fetch: fn as typeof fetch })
+    await client.manager.proposeAction(body)
+    expect(calls[0].init.method).toBe('POST')
+    expect(calls[0].url).toMatch(/\/api\/agent\/actions$/)
+    expect((calls[0].init.headers as Record<string, string>)['Authorization']).toBe(`Bearer ${SHOP_TOKEN}`)
+    const sent = JSON.parse(calls[0].init.body as string)
+    expect(sent.type).toBe('felvetel')
+    expect(sent.productId).toBe(42)
+  })
+
+  it('manager.rejectAction(7) → POST /api/agent/actions/7/reject, Bearer', async () => {
+    const { fn, calls } = makeFetch(200, { id: 7 })
+    const client = createClient({ apiKey: SHOP_TOKEN, fetch: fn as typeof fetch })
+    await client.manager.rejectAction(7)
+    expect(calls[0].init.method).toBe('POST')
+    expect(calls[0].url).toContain('/api/agent/actions/7/reject')
+    expect((calls[0].init.headers as Record<string, string>)['Authorization']).toBe(`Bearer ${SHOP_TOKEN}`)
+  })
+})
+
+// ── manager namespace — legacy mode rejects without HTTP calls ────────────────
+
+describe('createClient() — manager methods rejected in legacy mode', () => {
+  const saved = { ...process.env }
+  beforeEach(() => {
+    for (const k of ['HASZNO_API_TOKEN', 'HASZNO_API_KEY', 'ARFUTAR_API_KEY']) delete process.env[k]
+  })
+  afterEach(() => {
+    Object.assign(process.env, saved)
+    for (const k of Object.keys(process.env)) {
+      if (!(k in saved)) delete process.env[k]
+    }
+  })
+
+  const managerOps: Array<{ label: string; call: (c: ReturnType<typeof createClient>) => Promise<unknown> }> = [
+    { label: 'manager.listReports', call: (c) => c.manager.listReports() },
+    { label: 'manager.getReport', call: (c) => c.manager.getReport('latest') },
+    { label: 'manager.getResearchBrief', call: (c) => c.manager.getResearchBrief() },
+    { label: 'manager.postFindings', call: (c) => c.manager.postFindings('2026-11-12', { items: [] }) },
+    { label: 'manager.listActions', call: (c) => c.manager.listActions() },
+    { label: 'manager.proposeAction', call: (c) => c.manager.proposeAction({ type: 'felvetel', productId: 1, reason: 'test' }) },
+    { label: 'manager.rejectAction', call: (c) => c.manager.rejectAction(1) },
+  ]
+
+  it.each(managerOps)('$label rejects with LegacyKeyNotSupportedError and no HTTP call', async ({ call }) => {
+    const { fn } = makeFetch(200, {})
+    const client = createClient({ apiKey: LEGACY_KEY, fetch: fn as typeof fetch })
+    await expect(call(client)).rejects.toMatchObject({ name: 'LegacyKeyNotSupportedError' })
+    // Verify the error is an instance of LegacyKeyNotSupportedError
+    await expect(call(client)).rejects.toBeInstanceOf(LegacyKeyNotSupportedError)
+    // No HTTP call must have been made
+    expect(fn).not.toHaveBeenCalled()
   })
 })

@@ -95,7 +95,7 @@ const FindingInputSchema = z.object({
       z.object({
         type: z.literal('ar'),
         productId: z.number().int().positive(),
-        priceGross: z.number().positive(),
+        priceGross: z.number().int().positive().describe('egész szám (Ft)'),
       }),
       z.object({ type: z.literal('import'), networkProductId: z.number().int().positive() }),
     ])
@@ -363,10 +363,11 @@ export function registerManagerTools(server: McpServer, client: HasznoClient): v
           .describe('Hálózati termékazonosító (kötelező: import típusnál)'),
         priceGross: z
           .number()
+          .int()
           .positive()
           .optional()
           .describe(
-            'Javasolt bruttó ár forintban (kötelező: ar típusnál). ' +
+            'Javasolt bruttó ár egész szám (Ft), kötelező ar típusnál. ' +
             'A szerver ellenőrzi, hogy >= az abszolút ár-padlónak.',
           ),
         reason: z

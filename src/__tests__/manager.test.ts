@@ -95,7 +95,7 @@ const RESEARCH_BRIEF: ResearchBrief = {
     },
   ],
   questions: ['Milyen ártrendek figyelhetők meg a PS5 Pro piacon?'],
-  postTo: '/api/daily-reports/2026-11-12/findings',
+  postTo: '/api/agent/daily-report/2026-11-12/findings',
 }
 
 const AGENT_ACTION: AgentAction = {
