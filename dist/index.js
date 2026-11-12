@@ -2181,7 +2181,7 @@ function readHasznoConfig() {
   return {};
 }
 async function main() {
-  const envApiKey = process.env["HASZNO_API_KEY"] ?? process.env["ARFUTAR_API_KEY"];
+  const envApiKey = process.env["HASZNO_API_TOKEN"] ?? process.env["HASZNO_API_KEY"] ?? process.env["ARFUTAR_API_KEY"];
   const envApiUrl = process.env["HASZNO_API_URL"] ?? process.env["ARFUTAR_API_URL"];
   const envBasic = process.env["HASZNO_BASIC"] ?? process.env["ARFUTAR_BASIC"];
   let apiKey = envApiKey;
