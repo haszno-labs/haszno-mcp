@@ -53,26 +53,10 @@ claude mcp add haszno -- node ~/.haszno/haszno-mcp/dist/index.js
 
 A szerver az alábbi sorrendben olvassa a hitelesítési adatokat:
 
-1. `HASZNO_API_TOKEN` — bolt API-token (**elsődleges**; létrehozás: Haszno → Integráció → API-kulcsok)
-2. `HASZNO_API_KEY` — `HASZNO_API_TOKEN` örökös aliasza (csendes migráció; mindkettő `Authorization: Bearer`-ként küldődik)
-3. `ARFUTAR_API_KEY` — régi alias (csendes visszafelé-kompatibilitás)
-4. `HASZNO_BASIC` — HTTP Basic auth (csak session-alapú végpontokhoz)
-5. `~/.config/haszno/config.json` — a CLI `haszno configure` parancsa írja
-6. `~/.config/arfutar/config.json` (csendes visszafelé-kompatibilitás)
-
-### API-kulcs létrehozása
-
-1. Lépj be a [haszno.com](https://haszno.com) → **Integráció → API-kulcsok** oldalra
-2. Kattints az **Új API-kulcs** gombra, adj nevet, válaszd az **agent** hatáskört
-3. Másold ki a `haszno_…` tokent — csak egyszer látható
-4. Állítsd be: `HASZNO_API_TOKEN=haszno_…`
-
-> **Hatáskörök:** a bolt token **olvasási** jogot ad a termékekhez, rendelésekhez és függő javaslatokhoz,
-> valamint **írási** jogot új javaslatok létrehozásához (csak pending státuszba).
-> A jóváhagyás / elutasítás / visszagörgetés emberi döntést igényel a webes felületen —
-> ez szándékos: az árváltozásokhoz kötelező az ember-a-hurokba elv.
-
-> **Lejárat:** a token az API-kulcsok oldalon megjelölt idő után lejár. Lejáratkor hozz létre újat.
+1. `HASZNO_API_KEY` / `HASZNO_API_URL` környezeti változók
+2. `ARFUTAR_API_KEY` / `ARFUTAR_API_URL` (csendes visszafelé-kompatibilitás)
+3. `~/.config/haszno/config.json` — a CLI `haszno configure` parancsa írja
+4. `~/.config/arfutar/config.json` (csendes visszafelé-kompatibilitás)
 
 A konfigurációs fájl formátuma (lapos, nem profil-keyed):
 
@@ -96,8 +80,7 @@ haszno_account_configure(apiUrl: "https://haszno.com", apiKey: "haszno_xxxx", co
 | Változó | Leírás |
 |---|---|
 | `HASZNO_API_URL` | A Haszno-példány alap URL-je (alapértelmezett: `https://haszno.com`) |
-| `HASZNO_API_TOKEN` | Bolt Bearer token (**elsődleges**) — `Authorization: Bearer`-ként küldődik |
-| `HASZNO_API_KEY` | `HASZNO_API_TOKEN` örökös aliasza — azonos módon kezelt |
+| `HASZNO_API_KEY` | API kulcs a hitelesítéshez |
 
 ---
 
@@ -121,19 +104,14 @@ haszno_account_configure(apiUrl: "https://haszno.com", apiKey: "haszno_xxxx", co
 - `haszno_catalog_sync_supplier` — partner szinkronizálása
 
 ### Termékek (`haszno_products_*`)
-- `haszno_products_list` — bolt termékei marginnal és ajánlott árakkal (agent endpoint)
-- `haszno_products_update` — *(nem elérhető bolt tokennel)*
-- `haszno_products_set_listing` — *(nem elérhető bolt tokennel)*
-- `haszno_products_apply_prices` — *(nem elérhető bolt tokennel)*
-- `haszno_products_ai_description` — *(nem elérhető bolt tokennel)*
+- *(hamarosan)*
 
 ### Árajánlatok (`haszno_proposals_*`)
-- `haszno_proposals_list` — függő javaslatok listája (agent endpoint; csak pending)
-- `haszno_proposals_market` — javaslat + termék kontextus (agent endpoint)
-- `haszno_proposals_create` — új pending javaslat létrehozása automatikus nonce-szal (agent endpoint)
-- `haszno_proposals_approve` — *(nem elérhető bolt tokennel — emberi jóváhagyás szükséges)*
-- `haszno_proposals_reject` — *(nem elérhető bolt tokennel — emberi jóváhagyás szükséges)*
-- `haszno_proposals_rollback` — *(nem elérhető bolt tokennel — emberi jóváhagyás szükséges)*
+- `haszno_proposals_list` — javaslatok listája / lapozás
+- `haszno_proposals_market` — javaslat + piaci kontextus
+- `haszno_proposals_approve` — javaslatok jóváhagyása
+- `haszno_proposals_reject` — javaslatok elutasítása
+- `haszno_proposals_rollback` — köteg visszavonása
 
 ### Automatikák / Szabályok (`haszno_rules_*`, `haszno_automation_*`)
 - `haszno_rules_list_templates` — sablonok
@@ -143,11 +121,9 @@ haszno_account_configure(apiUrl: "https://haszno.com", apiKey: "haszno_xxxx", co
 - `haszno_automation_get` / `haszno_automation_set`
 
 ### Megrendelések (`haszno_orders_*`)
-- `haszno_orders_list` — utolsó 20 rendelés (agent endpoint; id, vevő, állapot, összeg, tételek)
-- `haszno_orders_get` — egy rendelés tételekkel (agent endpoint)
-- `haszno_orders_ship` — *(nem elérhető bolt tokennel)*
-- `haszno_orders_receive` — *(nem elérhető bolt tokennel)*
-- `haszno_orders_create_demo` — *(nem elérhető bolt tokennel)*
+- `haszno_orders_list` / `haszno_orders_get`
+- `haszno_orders_ship` / `haszno_orders_receive`
+- `haszno_orders_create_demo` *(csak demo környezetben)*
 
 ### Feedek (`haszno_feeds_*`)
 - `haszno_feeds_import_supplier` — beszállítói feed importálása
