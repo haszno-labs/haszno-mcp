@@ -45,6 +45,13 @@ import type {
   RunResult,
   RuleCondition,
   RuleAction,
+  DailyReport,
+  DailyReportSummary,
+  ResearchBrief,
+  FindingsInput,
+  AgentAction,
+  ActionStatus,
+  ActionInput,
 } from './types.js'
 
 export type { HttpOptions }
@@ -174,6 +181,15 @@ export interface HasznoClient {
   blog: {
     list(params?: { period?: BlogPeriod; page?: number; perPage?: number }): Promise<BlogListResult>
     get(slug: string): Promise<BlogPost>
+  }
+
+  manager: {
+    listReports(): Promise<DailyReportSummary[]>
+    getReport(day: 'latest' | string): Promise<DailyReport | null>
+    getResearchBrief(): Promise<ResearchBrief>
+    postFindings(day: string, body: FindingsInput): Promise<DailyReport>
+    listActions(params?: { status?: ActionStatus; limit?: number }): Promise<AgentAction[]>
+    proposeAction(body: ActionInput & { reason: string; reportItemId?: number }): Promise<AgentAction>
   }
 }
 
@@ -339,6 +355,26 @@ export function createClient(opts: HttpOptions = {}): HasznoClient {
         return get(`/api/blog${suffix}`, o)
       },
       get: (slug) => get(`/api/blog/${slug}`, o),
+    },
+
+    manager: {
+      listReports: () => get('/api/daily-reports', o),
+      // Agent-facing report routes use /api/agent/ so Bearer tokens bypass the outer
+      // Basic-auth gate on Vercel and authenticate via the per-shop token handler.
+      getReport: (day) =>
+        day === 'latest'
+          ? get('/api/agent/daily-report', o)
+          : get(`/api/agent/daily-report/${day}`, o),
+      getResearchBrief: () => get('/api/agent/research-brief', o),
+      postFindings: (day, body) => post(`/api/agent/daily-report/${day}/findings`, body, o),
+      listActions: (params) => {
+        const qs = new URLSearchParams()
+        if (params?.status) qs.set('status', params.status)
+        if (params?.limit != null) qs.set('limit', String(params.limit))
+        const suffix = qs.toString() ? `?${qs.toString()}` : ''
+        return get(`/api/agent/actions${suffix}`, o)
+      },
+      proposeAction: (body) => post('/api/agent/actions', body, o),
     },
   }
 }
