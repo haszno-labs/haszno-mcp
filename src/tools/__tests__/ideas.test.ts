@@ -53,7 +53,7 @@ function makeClient(overrides: Partial<HasznoClient> = {}): HasznoClient {
     feeds: { importFeed: vi.fn(), importMarketPrices: vi.fn() },
     orders: { list: vi.fn(), receiveOrder: vi.fn(), ship: vi.fn(), createDemo: vi.fn() },
     rules: { listTemplates: vi.fn(), list: vi.fn(), create: vi.fn(), update: vi.fn(), delete: vi.fn(), run: vi.fn(), runAll: vi.fn(), trigger: vi.fn(), listRuns: vi.fn(), undoUnlists: vi.fn() },
-    proposals: { list: vi.fn(), approve: vi.fn(), reject: vi.fn(), rollback: vi.fn() },
+    proposals: { list: vi.fn(), approve: vi.fn(), reject: vi.fn(), rollback: vi.fn(), propose: vi.fn() },
     automation: { get: vi.fn(), set: vi.fn() },
     network: { listSuppliers: vi.fn(), getSupplierProducts: vi.fn(), connect: vi.fn(), disconnect: vi.fn(), sync: vi.fn(), getSupplierView: vi.fn() },
   }

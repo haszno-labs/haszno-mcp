@@ -144,12 +144,13 @@ describe('registerProposalsTools()', () => {
     registerProposalsTools(server as never, client)
   })
 
-  it('registers exactly 5 proposal tools', () => {
+  it('registers exactly 6 proposal tools (including propose for shop tokens)', () => {
     const proposalTools = [...server.tools.keys()].filter((k) => k.startsWith('haszno_proposals'))
     expect(proposalTools.sort()).toEqual([
       'haszno_proposals_approve',
       'haszno_proposals_list',
       'haszno_proposals_market',
+      'haszno_proposals_propose',
       'haszno_proposals_reject',
       'haszno_proposals_rollback',
     ])
