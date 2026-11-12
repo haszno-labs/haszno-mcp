@@ -1,8 +1,6 @@
 /**
  * Low-level fetch wrapper — the ONLY place HTTP calls happen in the client.
- * - Auth from env: HASZNO_API_TOKEN → Authorization: Bearer (canonical for shop API tokens)
- *   HASZNO_API_KEY → Authorization: Bearer (silent migration alias)
- *   HASZNO_BASIC  → Authorization: Basic  (HTTP Basic, for session-based endpoints)
+ * - Auth from env: HASZNO_API_KEY → x-api-key header (fallback: ARFUTAR_API_KEY).
  * - Never logs or exposes credentials.
  * - Retries 5xx and 429 with exponential back-off (max 3 attempts).
  */
@@ -23,21 +21,11 @@ export interface HttpOptions {
 }
 
 function buildAuthHeader(opts: HttpOptions): Record<string, string> {
-  // Shop API token: HASZNO_API_TOKEN (canonical) or HASZNO_API_KEY (migration alias).
-  // Both are sent as Authorization: Bearer <token>.
-  // Never print credentials.
-  const bearerToken =
-    opts.apiKey ??
-    process.env['HASZNO_API_TOKEN'] ??
-    process.env['HASZNO_API_KEY'] ?? // silent migration alias
-    process.env['ARFUTAR_API_KEY'] // legacy alias
-  if (bearerToken) return { Authorization: `Bearer ${bearerToken}` }
+  // Never print credentials
+  const key = opts.apiKey ?? process.env['HASZNO_API_KEY'] ?? process.env['ARFUTAR_API_KEY']
+  if (key) return { 'x-api-key': key }
 
-  // HTTP Basic is kept as an escape hatch for session-based endpoints.
-  const basic =
-    opts.basicAuth ??
-    process.env['HASZNO_BASIC'] ??
-    process.env['ARFUTAR_BASIC'] // legacy alias
+  const basic = opts.basicAuth ?? process.env['HASZNO_BASIC'] ?? process.env['ARFUTAR_BASIC']
   if (basic) {
     const encoded = Buffer.from(basic).toString('base64')
     return { Authorization: `Basic ${encoded}` }

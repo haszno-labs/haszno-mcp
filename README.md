@@ -53,26 +53,10 @@ claude mcp add haszno -- node ~/.haszno/haszno-mcp/dist/index.js
 
 The server resolves credentials in this order:
 
-1. `HASZNO_API_TOKEN` — per-shop Bearer token (**canonical**; create at Haszno → Integráció → API-kulcsok)
-2. `HASZNO_API_KEY` — legacy alias for `HASZNO_API_TOKEN` (silent migration; both are sent as `Authorization: Bearer`)
-3. `ARFUTAR_API_KEY` — legacy alias (silent backwards-compatibility)
-4. `HASZNO_BASIC` — HTTP Basic auth (session-based endpoints only)
-5. `~/.config/haszno/config.json` — written by `haszno configure` in the CLI
-6. `~/.config/arfutar/config.json` (silent backwards-compatibility)
-
-### Creating a shop token
-
-1. Log in to [haszno.com](https://haszno.com) → **Integráció → API-kulcsok**
-2. Click **Új API-kulcs**, give it a name, select the **agent** scope
-3. Copy the `haszno_…` token — it is shown only once
-4. Set `HASZNO_API_TOKEN=haszno_…` in your environment
-
-> **Scopes:** shop tokens have **read** access to products, orders, and pending proposals,
-> and **write** access to create proposals (pending only).
-> Approve / reject / rollback operations require human review through the web dashboard —
-> this is by design (human-in-the-loop is mandatory for price changes).
-
-> **Expiry:** tokens expire after the period shown in API-kulcsok. Generate a new one when it expires.
+1. `HASZNO_API_KEY` / `HASZNO_API_URL` environment variables
+2. `ARFUTAR_API_KEY` / `ARFUTAR_API_URL` (silent backwards-compatibility)
+3. `~/.config/haszno/config.json` — written by `haszno configure` in the CLI
+4. `~/.config/arfutar/config.json` (silent backwards-compatibility)
 
 Config file format (flat, not profile-keyed):
 
@@ -96,8 +80,7 @@ haszno_account_configure(apiUrl: "https://haszno.com", apiKey: "haszno_xxxx", co
 | Variable | Description |
 |---|---|
 | `HASZNO_API_URL` | Base URL of your Haszno instance (default: `https://haszno.com`) |
-| `HASZNO_API_TOKEN` | Per-shop Bearer token (**canonical**) — sent as `Authorization: Bearer` |
-| `HASZNO_API_KEY` | Legacy alias for `HASZNO_API_TOKEN` — treated identically |
+| `HASZNO_API_KEY` | API key for authentication |
 
 ---
 
@@ -121,19 +104,12 @@ haszno_account_configure(apiUrl: "https://haszno.com", apiKey: "haszno_xxxx", co
 - `haszno_catalog_sync_supplier` — sync a supplier
 
 ### Products (`haszno_products_*`)
-- `haszno_products_list` — list shop products with margin and recommended pricing (agent endpoint)
-- `haszno_products_update` — *(not available with shop token — returns "not available" message)*
-- `haszno_products_set_listing` — *(not available with shop token)*
-- `haszno_products_apply_prices` — *(not available with shop token)*
-- `haszno_products_ai_description` — *(not available with shop token)*
+- *(coming soon)*
 
 ### Price proposals (`haszno_proposals_*`)
-- `haszno_proposals_list` — list pending proposals (agent endpoint; pending only)
-- `haszno_proposals_market` — proposal + product context (agent endpoint)
-- `haszno_proposals_create` — create a pending proposal with auto-generated nonce (agent endpoint)
-- `haszno_proposals_approve` — *(not available with shop token — human review required)*
-- `haszno_proposals_reject` — *(not available with shop token — human review required)*
-- `haszno_proposals_rollback` — *(not available with shop token — human review required)*
+- `haszno_proposals_list` — list / paginate proposals
+- `haszno_proposals_market` — proposal + market context
+- `haszno_proposals_approve` — approve proposals
 - `haszno_proposals_reject` — reject proposals
 - `haszno_proposals_rollback` — roll back a batch
 
@@ -145,11 +121,9 @@ haszno_account_configure(apiUrl: "https://haszno.com", apiKey: "haszno_xxxx", co
 - `haszno_automation_get` / `haszno_automation_set`
 
 ### Orders (`haszno_orders_*`)
-- `haszno_orders_list` — last 20 orders via agent endpoint (id, customerName, status, totalGross, items)
-- `haszno_orders_get` — one order with line items (agent endpoint)
-- `haszno_orders_ship` — *(not available with shop token)*
-- `haszno_orders_receive` — *(not available with shop token)*
-- `haszno_orders_create_demo` — *(not available with shop token)*
+- `haszno_orders_list` / `haszno_orders_get`
+- `haszno_orders_ship` / `haszno_orders_receive`
+- `haszno_orders_create_demo` *(demo environment only)*
 
 ### Feeds (`haszno_feeds_*`)
 - `haszno_feeds_import_supplier` — import a supplier feed

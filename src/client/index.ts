@@ -3,13 +3,8 @@
  *
  * Usage:
  *   import { createClient } from './client/index.js'
- *   const client = createClient()   // reads HASZNO_API_URL + HASZNO_API_TOKEN from env
- *   const products = await client.agent.products()
- *
- * Authentication:
- *   HASZNO_API_TOKEN — per-shop Bearer token (canonical, created in Haszno → Integráció → API-kulcsok)
- *   HASZNO_API_KEY   — legacy alias, treated as a Bearer token for migration
- *   HASZNO_BASIC     — HTTP Basic auth (session-based endpoints only)
+ *   const client = createClient()   // reads HASZNO_API_URL + HASZNO_API_KEY from env
+ *   const products = await client.products.list()
  */
 import { type HttpOptions, get, post, put, patch, del } from './http.js'
 import type {
@@ -50,11 +45,6 @@ import type {
   RunResult,
   RuleCondition,
   RuleAction,
-  AgentProduct,
-  AgentOrder,
-  AgentProposal,
-  CreateProposalRequest,
-  CreateProposalResult,
 } from './types.js'
 
 export type { HttpOptions }
@@ -184,19 +174,6 @@ export interface HasznoClient {
   blog: {
     list(params?: { period?: BlogPeriod; page?: number; perPage?: number }): Promise<BlogListResult>
     get(slug: string): Promise<BlogPost>
-  }
-
-  /**
-   * Agent (per-shop Bearer token) endpoints.
-   * These are the only endpoints available when authenticating with HASZNO_API_TOKEN.
-   * Approve/reject/rollback operations require a session token and return 403 for shop tokens —
-   * use the web dashboard instead.
-   */
-  agent: {
-    products(): Promise<AgentProduct[]>
-    orders(): Promise<AgentOrder[]>
-    proposals(): Promise<AgentProposal[]>
-    createProposal(body: CreateProposalRequest): Promise<CreateProposalResult>
   }
 }
 
@@ -362,13 +339,6 @@ export function createClient(opts: HttpOptions = {}): HasznoClient {
         return get(`/api/blog${suffix}`, o)
       },
       get: (slug) => get(`/api/blog/${slug}`, o),
-    },
-
-    agent: {
-      products: () => get('/api/agent/products', o),
-      orders: () => get('/api/agent/orders', o),
-      proposals: () => get('/api/agent/proposals', o),
-      createProposal: (body) => post('/api/agent/proposals', body, o),
     },
   }
 }
