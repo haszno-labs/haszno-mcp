@@ -1,10 +1,27 @@
 /**
  * Low-level fetch wrapper — the ONLY place HTTP calls happen in the client.
- * - Auth from env: HASZNO_API_KEY → x-api-key header (fallback: ARFUTAR_API_KEY).
- * - Never logs or exposes credentials.
- * - Retries 5xx and 429 with exponential back-off (max 3 attempts).
+ *
+ * Authentication is dual-mode:
+ *   - Shop API token (starts with "haszno_"): Authorization: Bearer <token>
+ *     Accepted from HASZNO_API_TOKEN (preferred), HASZNO_API_KEY, ARFUTAR_API_KEY, or opts.apiKey.
+ *   - Non-prefixed API key: x-api-key header (unchanged legacy behaviour).
+ *   - HTTP Basic ("user:password"): Authorization: Basic <base64> (unchanged).
+ *
+ * The haszno_ prefix is the token's shape, not a scope selection — any key that
+ * starts with "haszno_" is a shop Bearer token; everything else is a legacy key.
+ *
+ * Never logs or exposes credentials.
+ * Retries 5xx and 429 with exponential back-off (max 3 attempts).
  */
 import { HasznoApiError } from './error.js'
+
+/** Prefix that server-issued shop API tokens always carry. */
+export const SHOP_TOKEN_PREFIX = 'haszno_'
+
+/** Returns true when `key` is a server-issued shop API token. */
+export function isShopToken(key: string | undefined): key is string {
+  return !!key?.startsWith(SHOP_TOKEN_PREFIX)
+}
 
 export interface HttpOptions {
   baseUrl?: string
@@ -21,9 +38,20 @@ export interface HttpOptions {
 }
 
 function buildAuthHeader(opts: HttpOptions): Record<string, string> {
-  // Never print credentials
-  const key = opts.apiKey ?? process.env['HASZNO_API_KEY'] ?? process.env['ARFUTAR_API_KEY']
-  if (key) return { 'x-api-key': key }
+  // Priority: explicit opts.apiKey > HASZNO_API_TOKEN (new, preferred for shop tokens) >
+  //           HASZNO_API_KEY > ARFUTAR_API_KEY (legacy).
+  // Never print credentials.
+  const key =
+    opts.apiKey ??
+    process.env['HASZNO_API_TOKEN'] ??
+    process.env['HASZNO_API_KEY'] ??
+    process.env['ARFUTAR_API_KEY']
+
+  if (key) {
+    // Shop API token → Bearer; any other key → x-api-key (legacy behaviour unchanged).
+    if (isShopToken(key)) return { Authorization: `Bearer ${key}` }
+    return { 'x-api-key': key }
+  }
 
   const basic = opts.basicAuth ?? process.env['HASZNO_BASIC'] ?? process.env['ARFUTAR_BASIC']
   if (basic) {
