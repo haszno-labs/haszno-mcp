@@ -259,7 +259,7 @@ export function registerShopTools(server: McpServer, opts: HttpOptions): void {
         'Sort: "uj" (newest, default), "ar_nov" (price ascending), "ar_csokk" (price descending).',
       inputSchema: {
         q: z.string().optional().describe('Full-text search query'),
-        cat: z.string().optional().describe('Filter by category key (e.g. "jarmuvek", "elektronika")'),
+        cat: z.string().optional().describe('Filter by category key (e.g. "auto", "elektronika")'),
         sub: z.string().optional().describe('Filter by subcategory key (e.g. "szemelyauto")'),
         min: z.number().int().min(0).optional().describe('Minimum price in HUF gross'),
         max: z.number().int().min(0).optional().describe('Maximum price in HUF gross'),
@@ -331,7 +331,7 @@ export function registerShopTools(server: McpServer, opts: HttpOptions): void {
         'Use this before calling haszno_shop_create_ad to set a realistic priceGross. ' +
         'Pass cat (category key from haszno_shop_list_categories) and optionally sub (subcategory key).',
       inputSchema: {
-        cat: z.string().describe('Category key (e.g. "jarmuvek", "elektronika") from haszno_shop_list_categories'),
+        cat: z.string().describe('Category key (e.g. "auto", "elektronika") from haszno_shop_list_categories'),
         sub: z.string().optional().describe('Subcategory key to narrow the hint'),
         q: z.string().optional().describe('Item description or keywords (accepted but ignored by the server)'),
       },
@@ -645,14 +645,19 @@ export function registerShopTools(server: McpServer, opts: HttpOptions): void {
         'Image URLs must be in the format /api/shop/images/<id> (returned by haszno_shop_upload_image). ' +
         'This tool validates required category attributes before sending.',
       inputSchema: {
-        category: z.string().describe('Category key (e.g. "jarmuvek") from haszno_shop_list_categories'),
-        subcategory: z.string().optional().nullable().describe('Subcategory key (optional, e.g. "szemelya" for "jarmuvek")'),
+        category: z.string().describe('Category key (e.g. "auto") from haszno_shop_list_categories'),
+        subcategory: z.string().optional().nullable().describe('Subcategory key (optional, e.g. "szemelya" for "auto")'),
         title: z.string().min(5).max(120).describe('Ad title (5–120 characters)'),
         description: z.string().max(5000).describe('Ad description (max 5000 chars)'),
         priceGross: z.number().int().min(1).max(2_000_000_000).nullable().describe('Asking price in HUF gross, or null for "price on request"'),
         negotiable: z.boolean().describe('Whether the price is negotiable'),
         condition: z.enum(['uj', 'ujszeru', 'hasznalt', 'serult']).describe(
           'Product condition: "uj" (new), "ujszeru" (like new), "hasznalt" (used), "serult" (damaged)',
+        ),
+        defects: z.string().min(10).max(2000).optional().nullable().describe(
+          'Description of defects or damage (minimum 10 characters). ' +
+          'REQUIRED when condition is "hasznalt" (used) or "serult" (damaged) — ' +
+          'the API will return HTTP 422 if this field is missing for those conditions.',
         ),
         county: z.string().describe('Hungarian county name from haszno_shop_list_categories counties list'),
         city: z.string().min(1).max(80).describe('City name'),
@@ -683,7 +688,7 @@ export function registerShopTools(server: McpServer, opts: HttpOptions): void {
         return mkErr(validationError)
       }
 
-      const body = {
+      const body: Record<string, unknown> = {
         category: args.category,
         subcategory: args.subcategory ?? null,
         title: args.title,
@@ -702,6 +707,7 @@ export function registerShopTools(server: McpServer, opts: HttpOptions): void {
         resellable: args.resellable,
         partnerCommissionPct: args.partnerCommissionPct,
       }
+      if (args.defects != null) body['defects'] = args.defects
 
       try {
         const result = await post('/api/v1/shop/ads', body, opts)
@@ -1496,6 +1502,57 @@ export function registerShopTools(server: McpServer, opts: HttpOptions): void {
         return json(result)
       } catch (e) {
         return mapApiError(e, 'clear_draft')
+      }
+    },
+  )
+
+  // ─── haszno_shop_set_seller_profile ───────────────────────────────────────
+
+  server.registerTool(
+    'haszno_shop_set_seller_profile',
+    {
+      title: 'Set seller type (one-time setup required before first ad)',
+      description:
+        'Sets the seller type for the authenticated user\'s shop. ' +
+        'This is a ONE-TIME setup that MUST be completed before posting the first ad — ' +
+        'without it, haszno_shop_create_ad returns HTTP 409 "Az eladói típus megadása kötelező az első hirdetés feladásához". ' +
+        'Two seller types are supported: ' +
+        '"maganszemely" (private individual) and "kereskedo" (registered business/trader). ' +
+        'For "kereskedo", companyName and companyAddress are required. ' +
+        'The profile can be updated later; calling this again replaces the existing value. ' +
+        'Returns the updated seller profile. Requires authentication.',
+      inputSchema: {
+        sellerType: z.enum(['maganszemely', 'kereskedo']).describe(
+          '"maganszemely" = private individual, "kereskedo" = business/trader',
+        ),
+        companyName: z.string().min(1).max(200).optional().describe(
+          'Company name (required when sellerType is "kereskedo")',
+        ),
+        companyAddress: z.string().min(1).max(400).optional().describe(
+          'Company registered address (required when sellerType is "kereskedo")',
+        ),
+        companyRegNumber: z.string().max(50).optional().nullable().describe(
+          'Company registration number (optional, only for "kereskedo")',
+        ),
+      },
+      annotations: { readOnlyHint: false, destructiveHint: false, idempotentHint: true },
+    },
+    async (args) => {
+      if (args.sellerType === 'kereskedo') {
+        if (!args.companyName) return mkErr('companyName megadása kötelező kereskedo eladói típushoz.')
+        if (!args.companyAddress) return mkErr('companyAddress megadása kötelező kereskedo eladói típushoz.')
+      }
+      const body: Record<string, unknown> = { sellerType: args.sellerType }
+      if (args.sellerType === 'kereskedo') {
+        body['companyName'] = args.companyName
+        body['companyAddress'] = args.companyAddress
+        if (args.companyRegNumber != null) body['companyRegNumber'] = args.companyRegNumber
+      }
+      try {
+        const result = await put('/api/v1/shop/my/seller-profile', body, opts)
+        return json(result)
+      } catch (e) {
+        return mapApiError(e, 'set_seller_profile')
       }
     },
   )

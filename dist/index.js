@@ -2259,7 +2259,7 @@ function registerShopTools(server, opts) {
       description: 'Searches the public Haszno Hirdet\xE9si Piact\xE9r (marketplace) for second-hand ads. Returns a paginated list of ads including their id, title, priceGross (HUF), status, images, and a "reserved" flag (true when an accepted reservation exists for the ad). The Shop is free \u2014 no fees for browsing or contacting sellers. Filter by category with cat (category key string from haszno_shop_list_categories), full-text search with q, price range with min/max (HUF). Sort: "uj" (newest, default), "ar_nov" (price ascending), "ar_csokk" (price descending).',
       inputSchema: {
         q: z12.string().optional().describe("Full-text search query"),
-        cat: z12.string().optional().describe('Filter by category key (e.g. "jarmuvek", "elektronika")'),
+        cat: z12.string().optional().describe('Filter by category key (e.g. "auto", "elektronika")'),
         sub: z12.string().optional().describe('Filter by subcategory key (e.g. "szemelyauto")'),
         min: z12.number().int().min(0).optional().describe("Minimum price in HUF gross"),
         max: z12.number().int().min(0).optional().describe("Maximum price in HUF gross"),
@@ -2317,7 +2317,7 @@ function registerShopTools(server, opts) {
       title: "Get a suggested price hint",
       description: "Returns a suggested asking price range (p25\u2013p75 percentile) for a category, based on at least 5 distinct sellers' active listings. Returns null when there is not enough data. Use this before calling haszno_shop_create_ad to set a realistic priceGross. Pass cat (category key from haszno_shop_list_categories) and optionally sub (subcategory key).",
       inputSchema: {
-        cat: z12.string().describe('Category key (e.g. "jarmuvek", "elektronika") from haszno_shop_list_categories'),
+        cat: z12.string().describe('Category key (e.g. "auto", "elektronika") from haszno_shop_list_categories'),
         sub: z12.string().optional().describe("Subcategory key to narrow the hint"),
         q: z12.string().optional().describe("Item description or keywords (accepted but ignored by the server)")
       },
@@ -2543,14 +2543,17 @@ function registerShopTools(server, opts) {
       title: "Post a new marketplace ad",
       description: 'Creates a new Haszno Hirdet\xE9si Piact\xE9r (marketplace) ad. This is a REAL action \u2014 the ad becomes immediately visible to all users on haszno.com. Only call this when the user has explicitly confirmed they want to post the ad. The Haszno Shop is completely free \u2014 there are no listing fees. Before calling this tool: (1) call haszno_shop_list_categories to get the category key, subcategory key, required attrs, and valid county names; (2) call haszno_shop_upload_image for each photo and collect the returned "url" values; (3) call haszno_shop_price_hint for a price suggestion. Image URLs must be in the format /api/shop/images/<id> (returned by haszno_shop_upload_image). This tool validates required category attributes before sending.',
       inputSchema: {
-        category: z12.string().describe('Category key (e.g. "jarmuvek") from haszno_shop_list_categories'),
-        subcategory: z12.string().optional().nullable().describe('Subcategory key (optional, e.g. "szemelya" for "jarmuvek")'),
+        category: z12.string().describe('Category key (e.g. "auto") from haszno_shop_list_categories'),
+        subcategory: z12.string().optional().nullable().describe('Subcategory key (optional, e.g. "szemelya" for "auto")'),
         title: z12.string().min(5).max(120).describe("Ad title (5\u2013120 characters)"),
         description: z12.string().max(5e3).describe("Ad description (max 5000 chars)"),
         priceGross: z12.number().int().min(1).max(2e9).nullable().describe('Asking price in HUF gross, or null for "price on request"'),
         negotiable: z12.boolean().describe("Whether the price is negotiable"),
         condition: z12.enum(["uj", "ujszeru", "hasznalt", "serult"]).describe(
           'Product condition: "uj" (new), "ujszeru" (like new), "hasznalt" (used), "serult" (damaged)'
+        ),
+        defects: z12.string().min(10).max(2e3).optional().nullable().describe(
+          'Description of defects or damage (minimum 10 characters). REQUIRED when condition is "hasznalt" (used) or "serult" (damaged) \u2014 the API will return HTTP 422 if this field is missing for those conditions.'
         ),
         county: z12.string().describe("Hungarian county name from haszno_shop_list_categories counties list"),
         city: z12.string().min(1).max(80).describe("City name"),
@@ -2597,6 +2600,7 @@ function registerShopTools(server, opts) {
         resellable: args.resellable,
         partnerCommissionPct: args.partnerCommissionPct
       };
+      if (args.defects != null) body["defects"] = args.defects;
       try {
         const result = await post("/api/v1/shop/ads", body, opts);
         return json2(result);
@@ -3175,6 +3179,46 @@ function registerShopTools(server, opts) {
         return json2(result);
       } catch (e) {
         return mapApiError(e, "clear_draft");
+      }
+    }
+  );
+  server.registerTool(
+    "haszno_shop_set_seller_profile",
+    {
+      title: "Set seller type (one-time setup required before first ad)",
+      description: `Sets the seller type for the authenticated user's shop. This is a ONE-TIME setup that MUST be completed before posting the first ad \u2014 without it, haszno_shop_create_ad returns HTTP 409 "Az elad\xF3i t\xEDpus megad\xE1sa k\xF6telez\u0151 az els\u0151 hirdet\xE9s felad\xE1s\xE1hoz". Two seller types are supported: "maganszemely" (private individual) and "kereskedo" (registered business/trader). For "kereskedo", companyName and companyAddress are required. The profile can be updated later; calling this again replaces the existing value. Returns the updated seller profile. Requires authentication.`,
+      inputSchema: {
+        sellerType: z12.enum(["maganszemely", "kereskedo"]).describe(
+          '"maganszemely" = private individual, "kereskedo" = business/trader'
+        ),
+        companyName: z12.string().min(1).max(200).optional().describe(
+          'Company name (required when sellerType is "kereskedo")'
+        ),
+        companyAddress: z12.string().min(1).max(400).optional().describe(
+          'Company registered address (required when sellerType is "kereskedo")'
+        ),
+        companyRegNumber: z12.string().max(50).optional().nullable().describe(
+          'Company registration number (optional, only for "kereskedo")'
+        )
+      },
+      annotations: { readOnlyHint: false, destructiveHint: false, idempotentHint: true }
+    },
+    async (args) => {
+      if (args.sellerType === "kereskedo") {
+        if (!args.companyName) return mkErr2("companyName megad\xE1sa k\xF6telez\u0151 kereskedo elad\xF3i t\xEDpushoz.");
+        if (!args.companyAddress) return mkErr2("companyAddress megad\xE1sa k\xF6telez\u0151 kereskedo elad\xF3i t\xEDpushoz.");
+      }
+      const body = { sellerType: args.sellerType };
+      if (args.sellerType === "kereskedo") {
+        body["companyName"] = args.companyName;
+        body["companyAddress"] = args.companyAddress;
+        if (args.companyRegNumber != null) body["companyRegNumber"] = args.companyRegNumber;
+      }
+      try {
+        const result = await put("/api/v1/shop/my/seller-profile", body, opts);
+        return json2(result);
+      } catch (e) {
+        return mapApiError(e, "set_seller_profile");
       }
     }
   );
