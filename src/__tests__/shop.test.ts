@@ -812,4 +812,408 @@ describe('registerShopTools', () => {
       expect(getText(result)).toContain('409')
     })
   })
+
+  // ─── v0.3.0: Negotiation & messaging tools ───────────────────────────────────
+
+  describe('haszno_shop_counter_offer', () => {
+    it('calls POST /api/v1/shop/my/reservations/:id/counter with priceGross', async () => {
+      const { fn, calls } = makeFetch(200, { reservation: { id: 10, status: 'fuggoben', counterPriceGross: 15000 } })
+      registerShopTools(stub.server, makeOpts(fn))
+      const result = await stub.getToolCb('haszno_shop_counter_offer')({ id: 10, priceGross: 15000 })
+      expect(isError(result)).toBe(false)
+      expect(calls[0].url).toContain('/api/v1/shop/my/reservations/10/counter')
+      expect(calls[0].method).toBe('POST')
+      expect((calls[0].body as { priceGross: number })['priceGross']).toBe(15000)
+    })
+
+    it('maps 409 (not fuggoben) to error', async () => {
+      const { fn } = makeFetch(409, { error: 'A foglalás elfogadva állapotban van.' })
+      registerShopTools(stub.server, makeOpts(fn))
+      const result = await stub.getToolCb('haszno_shop_counter_offer')({ id: 1, priceGross: 5000 })
+      expect(isError(result)).toBe(true)
+      expect(getText(result)).toContain('409')
+    })
+
+    it('maps 404 (not seller / not found) to error', async () => {
+      const { fn } = makeFetch(404, { error: 'Nem található' })
+      registerShopTools(stub.server, makeOpts(fn))
+      const result = await stub.getToolCb('haszno_shop_counter_offer')({ id: 999, priceGross: 5000 })
+      expect(isError(result)).toBe(true)
+      expect(getText(result)).toContain('404')
+    })
+  })
+
+  describe('haszno_shop_accept_counter', () => {
+    it('calls POST /api/v1/shop/my/reservations/:id/accept-counter with empty body', async () => {
+      const { fn, calls } = makeFetch(200, {
+        reservation: { id: 10, status: 'fuggoben', offerPriceGross: 15000, counterPriceGross: null },
+      })
+      registerShopTools(stub.server, makeOpts(fn))
+      const result = await stub.getToolCb('haszno_shop_accept_counter')({ id: 10 })
+      expect(isError(result)).toBe(false)
+      expect(calls[0].url).toContain('/api/v1/shop/my/reservations/10/accept-counter')
+      expect(calls[0].method).toBe('POST')
+      expect(calls[0].body).toEqual({})
+    })
+
+    it('maps 409 (no active counter) to error', async () => {
+      const { fn } = makeFetch(409, { error: 'Nincs aktív ellenajánlat.' })
+      registerShopTools(stub.server, makeOpts(fn))
+      const result = await stub.getToolCb('haszno_shop_accept_counter')({ id: 5 })
+      expect(isError(result)).toBe(true)
+      expect(getText(result)).toContain('409')
+    })
+  })
+
+  describe('haszno_shop_list_messages', () => {
+    it('calls GET /api/v1/shop/my/reservations/:id/messages', async () => {
+      const { fn, calls } = makeFetch(200, {
+        items: [{ id: 1, author: 'buyer', body: 'Hello', createdAt: '2024-01-01T00:00:00Z' }],
+      })
+      registerShopTools(stub.server, makeOpts(fn))
+      const result = await stub.getToolCb('haszno_shop_list_messages')({ id: 10 })
+      expect(isError(result)).toBe(false)
+      expect(calls[0].url).toContain('/api/v1/shop/my/reservations/10/messages')
+      expect(calls[0].method).toBe('GET')
+      const data = parseResult(result) as { items: unknown[] }
+      expect(Array.isArray(data.items)).toBe(true)
+    })
+
+    it('maps 404 to error', async () => {
+      const { fn } = makeFetch(404, { error: 'Nem található' })
+      registerShopTools(stub.server, makeOpts(fn))
+      const result = await stub.getToolCb('haszno_shop_list_messages')({ id: 999 })
+      expect(isError(result)).toBe(true)
+      expect(getText(result)).toContain('404')
+    })
+  })
+
+  describe('haszno_shop_send_message', () => {
+    it('calls POST /api/v1/shop/my/reservations/:id/messages with body', async () => {
+      const { fn, calls } = makeFetch(201, {
+        message: { id: 7, author: 'seller', body: 'Az áru elérhető.', createdAt: '2024-01-02T00:00:00Z' },
+      })
+      registerShopTools(stub.server, makeOpts(fn))
+      const result = await stub.getToolCb('haszno_shop_send_message')({
+        id: 10,
+        body: 'Az áru elérhető.',
+      })
+      expect(isError(result)).toBe(false)
+      expect(calls[0].url).toContain('/api/v1/shop/my/reservations/10/messages')
+      expect(calls[0].method).toBe('POST')
+      expect((calls[0].body as { body: string })['body']).toBe('Az áru elérhető.')
+    })
+
+    it('maps 429 rate limit to error', async () => {
+      const { fn } = makeFetch(429, { error: 'Túl sok kérés' })
+      registerShopTools(stub.server, makeOpts(fn))
+      const result = await stub.getToolCb('haszno_shop_send_message')({ id: 1, body: 'Hello' })
+      expect(isError(result)).toBe(true)
+      expect(getText(result)).toContain('429')
+    })
+
+    it('maps 400 to error', async () => {
+      const { fn } = makeFetch(400, { error: 'Az üzenet nem lehet üres.' })
+      registerShopTools(stub.server, makeOpts(fn))
+      const result = await stub.getToolCb('haszno_shop_send_message')({ id: 1, body: '' })
+      expect(isError(result)).toBe(true)
+      expect(getText(result)).toContain('400')
+    })
+  })
+
+  describe('haszno_shop_review', () => {
+    it('calls POST /api/v1/shop/my/reservations/:id/review with rating', async () => {
+      const { fn, calls } = makeFetch(201, {
+        review: { id: 3, author: 'buyer', rating: 5, comment: 'Kiváló!', createdAt: '2024-01-03T00:00:00Z' },
+      })
+      registerShopTools(stub.server, makeOpts(fn))
+      const result = await stub.getToolCb('haszno_shop_review')({
+        id: 10,
+        rating: 5,
+        comment: 'Kiváló!',
+        confirm: true,
+      })
+      expect(isError(result)).toBe(false)
+      expect(calls[0].url).toContain('/api/v1/shop/my/reservations/10/review')
+      expect(calls[0].method).toBe('POST')
+      const body = calls[0].body as { rating: number; comment?: string }
+      expect(body['rating']).toBe(5)
+      expect(body['comment']).toBe('Kiváló!')
+    })
+
+    it('sends without comment when omitted', async () => {
+      const { fn, calls } = makeFetch(201, { review: { id: 4, author: 'seller', rating: 4 } })
+      registerShopTools(stub.server, makeOpts(fn))
+      await stub.getToolCb('haszno_shop_review')({ id: 11, rating: 4, confirm: true })
+      expect((calls[0].body as Record<string, unknown>)['comment']).toBeUndefined()
+    })
+
+    it('maps 409 (already reviewed) to error', async () => {
+      const { fn } = makeFetch(409, { error: 'Már hagytál értékelést.' })
+      registerShopTools(stub.server, makeOpts(fn))
+      const result = await stub.getToolCb('haszno_shop_review')({ id: 10, rating: 3, confirm: true })
+      expect(isError(result)).toBe(true)
+      expect(getText(result)).toContain('409')
+    })
+
+    it('maps 409 (not teljesitve) to error', async () => {
+      const { fn } = makeFetch(409, { error: 'Értékelés csak teljesített foglalásra.' })
+      registerShopTools(stub.server, makeOpts(fn))
+      const result = await stub.getToolCb('haszno_shop_review')({ id: 10, rating: 5, confirm: true })
+      expect(isError(result)).toBe(true)
+      expect(getText(result)).toContain('409')
+    })
+  })
+
+  describe('haszno_shop_reply_inquiry', () => {
+    it('calls POST /api/v1/shop/my/inquiries/:id/reply with message', async () => {
+      const { fn, calls } = makeFetch(201, {
+        reply: { id: 5, inquiryId: 20, message: 'Igen, elérhető.', createdAt: '2024-01-04T00:00:00Z' },
+      })
+      registerShopTools(stub.server, makeOpts(fn))
+      const result = await stub.getToolCb('haszno_shop_reply_inquiry')({
+        id: 20,
+        message: 'Igen, elérhető.',
+      })
+      expect(isError(result)).toBe(false)
+      expect(calls[0].url).toContain('/api/v1/shop/my/inquiries/20/reply')
+      expect(calls[0].method).toBe('POST')
+      expect((calls[0].body as { message: string })['message']).toBe('Igen, elérhető.')
+    })
+
+    it('maps 409 (already replied) to error', async () => {
+      const { fn } = makeFetch(409, { error: 'Erre az érdeklődésre már küldtél választ.' })
+      registerShopTools(stub.server, makeOpts(fn))
+      const result = await stub.getToolCb('haszno_shop_reply_inquiry')({ id: 1, message: 'Hello' })
+      expect(isError(result)).toBe(true)
+      expect(getText(result)).toContain('409')
+    })
+
+    it('maps 404 (not seller / not found) to error', async () => {
+      const { fn } = makeFetch(404, { error: 'Nem található' })
+      registerShopTools(stub.server, makeOpts(fn))
+      const result = await stub.getToolCb('haszno_shop_reply_inquiry')({ id: 999, message: 'Hello' })
+      expect(isError(result)).toBe(true)
+      expect(getText(result)).toContain('404')
+    })
+  })
+
+  // ─── v0.3.0: Existing-but-unexposed tools ────────────────────────────────────
+
+  describe('haszno_shop_list_saved_searches', () => {
+    it('calls GET /api/v1/shop/my/saved-searches', async () => {
+      const { fn, calls } = makeFetch(200, [
+        { id: 1, name: 'BMW keresés', filters: { q: 'bmw' }, alertEnabled: true, lastAlertSentAt: null, createdAt: '2024-01-01T00:00:00Z' },
+      ])
+      registerShopTools(stub.server, makeOpts(fn))
+      const result = await stub.getToolCb('haszno_shop_list_saved_searches')({})
+      expect(isError(result)).toBe(false)
+      expect(calls[0].url).toContain('/api/v1/shop/my/saved-searches')
+      expect(calls[0].method).toBe('GET')
+    })
+
+    it('maps 401 to error', async () => {
+      const { fn } = makeFetch(401, { error: 'Hitelesítés szükséges' })
+      registerShopTools(stub.server, makeOpts(fn))
+      const result = await stub.getToolCb('haszno_shop_list_saved_searches')({})
+      expect(isError(result)).toBe(true)
+      expect(getText(result)).toContain('401')
+    })
+  })
+
+  describe('haszno_shop_save_search', () => {
+    it('calls POST /api/v1/shop/my/saved-searches with name and filters', async () => {
+      const { fn, calls } = makeFetch(201, {
+        id: 2, name: 'Laptop keresés', filters: { q: 'laptop', min: 50000 }, alertEnabled: true,
+        lastAlertSentAt: null, createdAt: '2024-01-05T00:00:00Z',
+      })
+      registerShopTools(stub.server, makeOpts(fn))
+      const result = await stub.getToolCb('haszno_shop_save_search')({
+        name: 'Laptop keresés',
+        filters: { q: 'laptop', min: 50000 },
+        alertEnabled: true,
+      })
+      expect(isError(result)).toBe(false)
+      expect(calls[0].url).toContain('/api/v1/shop/my/saved-searches')
+      expect(calls[0].method).toBe('POST')
+      const body = calls[0].body as Record<string, unknown>
+      expect(body['name']).toBe('Laptop keresés')
+      expect((body['filters'] as { q: string })['q']).toBe('laptop')
+    })
+
+    it('maps 422 (cap reached) to error', async () => {
+      const { fn } = makeFetch(422, { error: 'Legfeljebb 20 mentett keresés lehetséges.' })
+      registerShopTools(stub.server, makeOpts(fn))
+      const result = await stub.getToolCb('haszno_shop_save_search')({ name: 'x', filters: {} })
+      expect(isError(result)).toBe(true)
+      expect(getText(result)).toContain('422')
+    })
+  })
+
+  describe('haszno_shop_delete_saved_search', () => {
+    it('calls DELETE /api/v1/shop/my/saved-searches/:id', async () => {
+      const { fn, calls } = makeFetch(200, { ok: true })
+      registerShopTools(stub.server, makeOpts(fn))
+      const result = await stub.getToolCb('haszno_shop_delete_saved_search')({ id: 3 })
+      expect(isError(result)).toBe(false)
+      expect(calls[0].url).toContain('/api/v1/shop/my/saved-searches/3')
+      expect(calls[0].method).toBe('DELETE')
+    })
+  })
+
+  describe('haszno_shop_watch_price', () => {
+    it('calls PUT /api/v1/shop/ads/:adId/watch when watch=true', async () => {
+      const { fn, calls } = makeFetch(200, { watched: true })
+      registerShopTools(stub.server, makeOpts(fn))
+      const result = await stub.getToolCb('haszno_shop_watch_price')({ adId: 42, watch: true })
+      expect(isError(result)).toBe(false)
+      expect(calls[0].url).toContain('/api/v1/shop/ads/42/watch')
+      expect(calls[0].method).toBe('PUT')
+    })
+
+    it('calls DELETE /api/v1/shop/ads/:adId/watch when watch=false', async () => {
+      const { fn, calls } = makeFetch(200, { watched: false })
+      registerShopTools(stub.server, makeOpts(fn))
+      const result = await stub.getToolCb('haszno_shop_watch_price')({ adId: 42, watch: false })
+      expect(isError(result)).toBe(false)
+      expect(calls[0].url).toContain('/api/v1/shop/ads/42/watch')
+      expect(calls[0].method).toBe('DELETE')
+    })
+
+    it('maps 400 (ad not active) to error when watch=true', async () => {
+      const { fn } = makeFetch(400, { error: 'Csak aktív hirdetésre lehet értesítőt beállítani.' })
+      registerShopTools(stub.server, makeOpts(fn))
+      const result = await stub.getToolCb('haszno_shop_watch_price')({ adId: 1, watch: true })
+      expect(isError(result)).toBe(true)
+      expect(getText(result)).toContain('400')
+    })
+  })
+
+  describe('haszno_shop_import_from_url', () => {
+    it('calls POST /api/v1/shop/assist/url-import with url', async () => {
+      const { fn, calls } = makeFetch(200, {
+        title: 'Samsung Galaxy S23',
+        description: 'Jó állapot, 1 éves.',
+        price: 150000,
+        images: ['https://example.com/img.jpg'],
+        parsed: { brand: 'Samsung' },
+      })
+      registerShopTools(stub.server, makeOpts(fn))
+      const result = await stub.getToolCb('haszno_shop_import_from_url')({
+        url: 'https://example.com/termek/123',
+      })
+      expect(isError(result)).toBe(false)
+      expect(calls[0].url).toContain('/api/v1/shop/assist/url-import')
+      expect(calls[0].method).toBe('POST')
+      expect((calls[0].body as { url: string })['url']).toBe('https://example.com/termek/123')
+    })
+
+    it('maps 422 (Facebook URL) to error', async () => {
+      const { fn } = makeFetch(422, { error: 'A Facebook hirdetéseket bejelentkezés nélkül nem lehet betölteni.', code: 'facebook_login_required' })
+      registerShopTools(stub.server, makeOpts(fn))
+      const result = await stub.getToolCb('haszno_shop_import_from_url')({
+        url: 'https://www.facebook.com/marketplace/item/123',
+      })
+      expect(isError(result)).toBe(true)
+      expect(getText(result)).toContain('422')
+    })
+
+    it('maps 429 rate limit to error', async () => {
+      const { fn } = makeFetch(429, { error: 'Túl sok kérés' })
+      registerShopTools(stub.server, makeOpts(fn))
+      const result = await stub.getToolCb('haszno_shop_import_from_url')({
+        url: 'https://example.com/termek/x',
+      })
+      expect(isError(result)).toBe(true)
+      expect(getText(result)).toContain('429')
+    })
+  })
+
+  describe('haszno_shop_get_draft', () => {
+    it('calls GET /api/v1/shop/my/draft', async () => {
+      const { fn, calls } = makeFetch(200, {
+        payload: { title: 'Teszt hirdetés', category: 'elektronika', priceGross: 50000 },
+        updatedAt: '2024-01-10T00:00:00Z',
+      })
+      registerShopTools(stub.server, makeOpts(fn))
+      const result = await stub.getToolCb('haszno_shop_get_draft')({})
+      expect(isError(result)).toBe(false)
+      expect(calls[0].url).toContain('/api/v1/shop/my/draft')
+      expect(calls[0].method).toBe('GET')
+    })
+
+    it('returns null when no draft exists', async () => {
+      const { fn, calls } = makeFetch(200, null)
+      registerShopTools(stub.server, makeOpts(fn))
+      const result = await stub.getToolCb('haszno_shop_get_draft')({})
+      expect(isError(result)).toBe(false)
+      expect(parseResult(result)).toBeNull()
+      expect(calls[0].url).toContain('/api/v1/shop/my/draft')
+    })
+  })
+
+  describe('haszno_shop_save_draft', () => {
+    it('calls PUT /api/v1/shop/my/draft with payload', async () => {
+      const payload = { title: 'Teszt', category: 'elektronika', priceGross: 80000 }
+      const { fn, calls } = makeFetch(200, { payload, updatedAt: '2024-01-10T00:00:00Z' })
+      registerShopTools(stub.server, makeOpts(fn))
+      const result = await stub.getToolCb('haszno_shop_save_draft')({ payload })
+      expect(isError(result)).toBe(false)
+      expect(calls[0].url).toContain('/api/v1/shop/my/draft')
+      expect(calls[0].method).toBe('PUT')
+      const sentBody = calls[0].body as Record<string, unknown>
+      expect(sentBody['title']).toBe('Teszt')
+      expect(sentBody['category']).toBe('elektronika')
+    })
+
+    it('maps 400 (too large) to error', async () => {
+      const { fn } = makeFetch(400, { error: 'A vázlat mérete meghaladja a megengedett méretet.' })
+      registerShopTools(stub.server, makeOpts(fn))
+      const result = await stub.getToolCb('haszno_shop_save_draft')({ payload: { title: 'x' } })
+      expect(isError(result)).toBe(true)
+      expect(getText(result)).toContain('400')
+    })
+  })
+
+  describe('haszno_shop_clear_draft', () => {
+    it('calls DELETE /api/v1/shop/my/draft', async () => {
+      const { fn, calls } = makeFetch(200, { ok: true })
+      registerShopTools(stub.server, makeOpts(fn))
+      const result = await stub.getToolCb('haszno_shop_clear_draft')({})
+      expect(isError(result)).toBe(false)
+      expect(calls[0].url).toContain('/api/v1/shop/my/draft')
+      expect(calls[0].method).toBe('DELETE')
+      expect((parseResult(result) as { ok: boolean }).ok).toBe(true)
+    })
+  })
+
+  describe('haszno_shop_remove_background', () => {
+    it('calls POST /api/v1/shop/images/:id/remove-bg', async () => {
+      const { fn, calls } = makeFetch(201, { id: 99, url: '/api/shop/images/99' })
+      registerShopTools(stub.server, makeOpts(fn))
+      const result = await stub.getToolCb('haszno_shop_remove_background')({ imageId: 42 })
+      expect(isError(result)).toBe(false)
+      expect(calls[0].url).toContain('/api/v1/shop/images/42/remove-bg')
+      expect(calls[0].method).toBe('POST')
+      const data = parseResult(result) as { id: number; url: string }
+      expect(data.id).toBe(99)
+      expect(data.url).toContain('/api/shop/images/99')
+    })
+
+    it('maps 404 (image not found or not owned) to error', async () => {
+      const { fn } = makeFetch(404, { error: 'Nem található' })
+      registerShopTools(stub.server, makeOpts(fn))
+      const result = await stub.getToolCb('haszno_shop_remove_background')({ imageId: 999 })
+      expect(isError(result)).toBe(true)
+      expect(getText(result)).toContain('404')
+    })
+
+    it('maps 409 (image quota exceeded) to error', async () => {
+      const { fn } = makeFetch(409, { error: 'Elérted a képes tárolási limitet.' })
+      registerShopTools(stub.server, makeOpts(fn))
+      const result = await stub.getToolCb('haszno_shop_remove_background')({ imageId: 5 })
+      expect(isError(result)).toBe(true)
+      expect(getText(result)).toContain('409')
+    })
+  })
 })

@@ -178,9 +178,12 @@ Reserving is not paying: payment and handover happen directly between buyer and 
 - `haszno_shop_list_my_ads` — your own non-deleted ads
 - `haszno_shop_list_inquiries` — messages buyers sent to your ads (`adId?`, `limit`, `offset`)
 - `haszno_shop_list_favorites` — your saved favorite ads
-- `haszno_shop_list_reservations` — your reservations as `buyer` (default) or `seller`
+- `haszno_shop_list_reservations` — your reservations as `buyer` (default) or `seller`; response includes `counterPriceGross` (seller counter-offer), `agreedPriceGross` (mutually agreed price), and `sellerRating` (buyer's rating of seller after completion)
+- `haszno_shop_list_messages` — messages in a reservation thread (`id` = reservation ID); response items include `author` (`buyer`|`seller`), `body`, `createdAt`
+- `haszno_shop_list_saved_searches` — your saved searches with alert settings; returns `{ id, name, filters, alertEnabled, lastAlertSentAt, createdAt }[]`
+- `haszno_shop_get_draft` — fetch your in-progress ad draft (returns `null` if none exists)
 
-**Write (require authentication; create/reserve/complete require `confirm: true`)**
+**Write (require authentication; destructive actions require `confirm: true`)**
 - `haszno_shop_upload_image` — upload a local file (`filePath`) or base64 image (`base64` + `mimeType`), max 700 KB, returns `{ id, url }`
 - `haszno_shop_suggest_from_photos` — AI pre-fill ad fields from uploaded image IDs (`imageIds: number[]`, 1–3)
 - `haszno_shop_create_ad` — post a new ad (validates required category attrs before sending) *(confirm: true)*
@@ -194,8 +197,22 @@ Reserving is not paying: payment and handover happen directly between buyer and 
 - `haszno_shop_respond_reservation` — `accept` or `decline` a reservation (seller)
 - `haszno_shop_cancel_reservation` — cancel your own reservation, sets status `visszavonva` (buyer)
 - `haszno_shop_complete_reservation` — mark a reservation fulfilled → ad becomes `eladva` (seller, irreversible) *(confirm: true)*
+- `haszno_shop_counter_offer` — seller proposes a counter-price on a pending reservation (`id`, `priceGross`); sets `counterPriceGross` on the reservation
+- `haszno_shop_accept_counter` — buyer accepts the seller's counter-offer (`id`); `offerPriceGross` is updated to the agreed price
+- `haszno_shop_send_message` — send a message in a reservation thread (`id`, `body`); returns `{ message: { id, author, body, createdAt } }`
+- `haszno_shop_review` — buyer leaves a star rating + optional comment after a completed reservation (`id`, `rating` 1–5, `comment?`) *(confirm: true)*
+- `haszno_shop_reply_inquiry` — seller replies to a buyer's inquiry (`id` = inquiry ID, `message`); returns `{ reply: { id, inquiryId, message, createdAt } }`
+- `haszno_shop_save_search` — save a search with optional price-alert (`name`, `filters`, `alertEnabled?`)
+- `haszno_shop_delete_saved_search` — delete a saved search by `id`
+- `haszno_shop_watch_price` — subscribe (`watch: true`) or unsubscribe (`watch: false`) to price-change alerts on an ad (`adId`)
+- `haszno_shop_import_from_url` — AI-extract ad fields (title, description, price, images) from a product page URL; returns `{ title?, description?, price?, images[], parsed }`
+- `haszno_shop_save_draft` — save or overwrite your in-progress ad draft (`payload`: partial ad fields); returns the saved draft with `updatedAt`
+- `haszno_shop_clear_draft` — permanently delete your ad draft
+- `haszno_shop_remove_background` — remove the background from an already-uploaded image (`imageId`); returns a new image object `{ id, url }`
 
 **Reservation statuses:** `fuggoben` (pending), `elfogadva` (accepted), `elutasitva` (declined/auto-declined), `visszavonva` (cancelled by buyer), `teljesitve` (completed), `lejart` (hold expired)
+
+**Price negotiation flow:** buyer places reservation (`offerPriceGross?`) → seller counters (`haszno_shop_counter_offer`) → buyer accepts (`haszno_shop_accept_counter`) → `agreedPriceGross` is set → seller completes → buyer reviews
 
 ---
 
