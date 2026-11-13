@@ -164,6 +164,36 @@ haszno_account_configure(apiUrl: "https://haszno.com", apiKey: "haszno_xxxx", co
 - `haszno_ideas_ai_description` — AI termékleírás generátor
 - `haszno_ideas_fill_keywords` — hiányzó trendkulcsszavak pótlása
 
+### Hirdetési Piactér (`haszno_shop_*`)
+
+A Haszno Shop (Hirdetési Piactér) **teljesen ingyenes** — sem feladásért, sem használatért nem kell fizetni.
+A foglalás nem fizetés: a vételár és az átadás közvetlenül a vevő és az eladó között zajlik.
+
+**Olvasó eszközök (mellékhatás nélkül)**
+- `haszno_shop_list_categories` — kategóriataxonómia a kötelező hirdetés-attribútumokkal
+- `haszno_shop_search_ads` — nyilvános hirdetések keresése (q, categoryId, minPrice, maxPrice, page, sort)
+- `haszno_shop_get_ad` — egyetlen hirdetés részletei a `reserved` jelzővel
+- `haszno_shop_price_hint` — javasolt árkeret kategória + kulcsszó alapján
+- `haszno_shop_list_my_ads` — saját hirdetéseid (szűrhető: aktiv/fuggeszetett/eladva/lejart)
+- `haszno_shop_list_inquiries` — vevők által küldött kérdések a hirdetéseimre
+- `haszno_shop_list_favorites` — mentett kedvenc hirdetések
+- `haszno_shop_list_reservations` — foglalásaim vevőként vagy eladóként
+
+**Író eszközök (hitelesítés szükséges; a create/reserve/complete megköveteli a `confirm: true` mezőt)**
+- `haszno_shop_upload_image` — kép feltöltése (helyi fájl vagy base64), visszaad egy URL-t
+- `haszno_shop_suggest_from_photos` — AI előtöltés feltöltött fotók URL-jei alapján
+- `haszno_shop_create_ad` — új hirdetés feladása (kötelező kategóriaattribútumokat ellenőrzi) *(confirm: true)*
+- `haszno_shop_update_ad` — meglévő hirdetés szerkesztése
+- `haszno_shop_set_ad_status` — hirdetés szüneteltetése (`fuggeszetett`) vagy aktiválása (`aktiv`)
+- `haszno_shop_mark_sold` — hirdetés eladottnak jelölése (visszafordíthatatlan) *(confirm: true)*
+- `haszno_shop_renew_ad` — hirdetés megújítása (visszakerül a lista tetejére)
+- `haszno_shop_send_inquiry` — kérdés küldése az eladónak
+- `haszno_shop_set_favorite` — kedvenc mentése vagy törlése
+- `haszno_shop_reserve_ad` — foglalás leadása egy hirdetésre (nem fizetés) *(confirm: true)*
+- `haszno_shop_respond_reservation` — foglalás elfogadása vagy elutasítása (eladó)
+- `haszno_shop_cancel_reservation` — saját foglalás lemondása (vevő)
+- `haszno_shop_complete_reservation` — foglalás teljesítettnek jelölése, zárja a hirdetést (eladó, visszafordíthatatlan) *(confirm: true)*
+
 ---
 
 ## Fejlesztés
