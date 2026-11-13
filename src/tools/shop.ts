@@ -403,7 +403,7 @@ export function registerShopTools(server: McpServer, opts: HttpOptions): void {
         'Use role="buyer" (default) to list reservations YOU placed on other people\'s ads. ' +
         'Use role="seller" to list reservations buyers placed on YOUR ads. ' +
         'Status values: "fuggoben" (pending), "elfogadva" (accepted), "elutasitva" (declined/auto-declined), ' +
-        '"lemondva" (cancelled by buyer), "teljesitve" (completed), "lejart" (hold expired). ' +
+        '"visszavonva" (cancelled by buyer), "teljesitve" (completed), "lejart" (hold expired). ' +
         'Contact fields (phone, email) are only filled in when status is "elfogadva" or "teljesitve". ' +
         'Reserving is not paying — payment and handover happen directly between buyer and seller.',
       inputSchema: {
@@ -923,7 +923,7 @@ export function registerShopTools(server: McpServer, opts: HttpOptions): void {
     {
       title: 'Cancel your reservation (buyer)',
       description:
-        'Cancels a reservation you placed as a buyer (status becomes "lemondva"). ' +
+        'Cancels a reservation you placed as a buyer (status becomes "visszavonva"). ' +
         'Only pending ("fuggoben") or accepted ("elfogadva") reservations can be cancelled. ' +
         'The Haszno Shop is free — cancellation has no cost.',
       inputSchema: {

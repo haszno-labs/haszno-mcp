@@ -2398,7 +2398,7 @@ function registerShopTools(server, opts) {
     "haszno_shop_list_reservations",
     {
       title: "List my reservations",
-      description: `Returns reservations for the authenticated user. Use role="buyer" (default) to list reservations YOU placed on other people's ads. Use role="seller" to list reservations buyers placed on YOUR ads. Status values: "fuggoben" (pending), "elfogadva" (accepted), "elutasitva" (declined/auto-declined), "lemondva" (cancelled by buyer), "teljesitve" (completed), "lejart" (hold expired). Contact fields (phone, email) are only filled in when status is "elfogadva" or "teljesitve". Reserving is not paying \u2014 payment and handover happen directly between buyer and seller.`,
+      description: `Returns reservations for the authenticated user. Use role="buyer" (default) to list reservations YOU placed on other people's ads. Use role="seller" to list reservations buyers placed on YOUR ads. Status values: "fuggoben" (pending), "elfogadva" (accepted), "elutasitva" (declined/auto-declined), "visszavonva" (cancelled by buyer), "teljesitve" (completed), "lejart" (hold expired). Contact fields (phone, email) are only filled in when status is "elfogadva" or "teljesitve". Reserving is not paying \u2014 payment and handover happen directly between buyer and seller.`,
       inputSchema: {
         role: z12.enum(["buyer", "seller"]).optional().describe('Whose perspective: "buyer" (default) or "seller"'),
         status: z12.string().optional().describe("Filter by reservation status"),
@@ -2794,7 +2794,7 @@ function registerShopTools(server, opts) {
     "haszno_shop_cancel_reservation",
     {
       title: "Cancel your reservation (buyer)",
-      description: 'Cancels a reservation you placed as a buyer (status becomes "lemondva"). Only pending ("fuggoben") or accepted ("elfogadva") reservations can be cancelled. The Haszno Shop is free \u2014 cancellation has no cost.',
+      description: 'Cancels a reservation you placed as a buyer (status becomes "visszavonva"). Only pending ("fuggoben") or accepted ("elfogadva") reservations can be cancelled. The Haszno Shop is free \u2014 cancellation has no cost.',
       inputSchema: {
         id: z12.number().int().min(1).describe("Reservation ID to cancel")
       },

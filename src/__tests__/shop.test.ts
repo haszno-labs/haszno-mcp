@@ -631,7 +631,7 @@ describe('registerShopTools', () => {
 
   describe('haszno_shop_cancel_reservation', () => {
     it('calls POST /api/v1/shop/my/reservations/:id/cancel', async () => {
-      const { fn, calls } = makeFetch(200, { reservation: { id: 5, status: 'lemondva' } })
+      const { fn, calls } = makeFetch(200, { reservation: { id: 5, status: 'visszavonva' } })
       registerShopTools(stub.server, makeOpts(fn))
       const result = await stub.getToolCb('haszno_shop_cancel_reservation')({ id: 5 })
       expect(isError(result)).toBe(false)
