@@ -1,25 +1,25 @@
 /**
  * MCP tools — Hirdetési piactér (shop / marketplace).
  *
- * All new endpoints use the /api/v1 prefix.
+ * All endpoints use the /api/v1 prefix (which the server normalises to /api).
  * Auth is passed through opts (Bearer haszno_ token or legacy key/Basic).
  *
  * Read tools:
- *   haszno_shop_list_categories    — category taxonomy
+ *   haszno_shop_list_categories    — full category taxonomy
  *   haszno_shop_search_ads         — search public ads
  *   haszno_shop_get_ad             — single ad detail (includes reserved flag)
- *   haszno_shop_price_hint         — suggested price for a category
+ *   haszno_shop_price_hint         — suggested price range for a category
  *   haszno_shop_list_my_ads        — my own ads (authenticated)
  *   haszno_shop_list_inquiries     — inquiries on my ads (authenticated)
  *   haszno_shop_list_favorites     — my saved favorites (authenticated)
  *   haszno_shop_list_reservations  — reservations as buyer or seller
  *
  * Write tools:
- *   haszno_shop_upload_image          — upload image file/base64, get URL back
- *   haszno_shop_suggest_from_photos   — AI pre-fill from uploaded image URLs
+ *   haszno_shop_upload_image          — upload image file/base64, get id + URL back
+ *   haszno_shop_suggest_from_photos   — AI pre-fill from uploaded image IDs
  *   haszno_shop_create_ad             — post a new ad (validates required category attrs)
- *   haszno_shop_update_ad             — edit an existing ad
- *   haszno_shop_set_ad_status         — pause or reactivate an ad
+ *   haszno_shop_update_ad             — edit an existing ad (fetches current then PUTs)
+ *   haszno_shop_set_ad_status         — pause, reactivate, or delete an ad
  *   haszno_shop_mark_sold             — mark an ad as sold
  *   haszno_shop_renew_ad              — renew / bump an ad
  *   haszno_shop_send_inquiry          — send a question to the seller
@@ -32,7 +32,7 @@
 import * as fs from 'node:fs'
 import { z } from 'zod'
 import type { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js'
-import { get, post, patch, del, type HttpOptions, SHOP_TOKEN_PREFIX } from '../client/http.js'
+import { get, post, put, del, type HttpOptions, SHOP_TOKEN_PREFIX } from '../client/http.js'
 import { HasznoApiError } from '../client/error.js'
 
 // ── Shared helpers ─────────────────────────────────────────────────────────────
@@ -61,11 +61,11 @@ function mapApiError(e: unknown, context: string): { content: Array<{ type: 'tex
   return mkErr(`${context}: ${String(e)}`)
 }
 
-// ── Multipart upload helper ───────────────────────────────────────────────────
+// ── Raw binary upload helper ──────────────────────────────────────────────────
 
 /**
  * Build auth headers matching http.ts buildAuthHeader, without Content-Type
- * (fetch sets it automatically with the FormData boundary).
+ * (caller sets Content-Type explicitly for the raw binary body).
  */
 function buildBearerHeaders(opts: HttpOptions): Record<string, string> {
   const key =
@@ -92,9 +92,14 @@ function buildBearerHeaders(opts: HttpOptions): Record<string, string> {
   return headers
 }
 
-async function uploadMultipart<T>(
+/**
+ * Upload raw binary bytes to a path.
+ * POST /api/v1/shop/images accepts raw body with Content-Type image/jpeg|png|webp.
+ */
+async function uploadRawBinary<T>(
   path: string,
-  formData: FormData,
+  bytes: Buffer,
+  mimeType: string,
   opts: HttpOptions,
 ): Promise<T> {
   const baseUrl = (
@@ -107,8 +112,11 @@ async function uploadMultipart<T>(
   const fetchFn = opts.fetch ?? fetch
   const response = await fetchFn(`${baseUrl}${path}`, {
     method: 'POST',
-    headers: buildBearerHeaders(opts),
-    body: formData,
+    headers: {
+      ...buildBearerHeaders(opts),
+      'Content-Type': mimeType,
+    },
+    body: bytes,
   })
 
   if (!response.ok) {
@@ -129,55 +137,61 @@ async function uploadMultipart<T>(
 
 // ─── Category attribute validation ───────────────────────────────────────────
 
-interface CategoryAttribute {
-  name: string
+interface AttrDef {
+  key: string
+  label: string
   required?: boolean
   type?: string
-  options?: string[]
+  options?: Array<{ value: string; label: string }>
 }
 
-interface ShopCategory {
-  id: number
-  name: string
-  slug?: string
-  parentId?: number | null
-  attributes?: CategoryAttribute[]
+interface TaxonomyCategory {
+  key: string
+  label: string
+  subcategories: Array<{ key: string; label: string; attrs: string[] }>
+  attrs: AttrDef[]
+}
+
+interface Taxonomy {
+  categories: TaxonomyCategory[]
+  conditions: Array<{ value: string; label: string }>
+  counties: string[]
 }
 
 /**
- * Fetches categories and validates that all required attributes for `categoryId`
- * are present in `suppliedAttributes`.
+ * Fetches the taxonomy and validates that all required attributes for `categoryKey`
+ * are present in `suppliedAttrs`.
  * Returns null on success, or an error string listing what is missing.
- * Skips validation (returns null) if the category fetch itself fails.
+ * Skips validation (returns null) if the taxonomy fetch itself fails.
  */
 async function validateCategoryAttributes(
-  categoryId: number,
-  suppliedAttributes: Record<string, unknown>,
+  categoryKey: string,
+  suppliedAttrs: Record<string, unknown>,
   opts: HttpOptions,
 ): Promise<string | null> {
-  let categories: ShopCategory[]
+  let taxonomy: Taxonomy
   try {
-    categories = await get<ShopCategory[]>('/api/v1/shop/categories', opts)
+    taxonomy = await get<Taxonomy>('/api/v1/shop/taxonomy', opts)
   } catch {
-    // Category fetch failed — skip validation, let the server decide
+    // Taxonomy fetch failed — skip validation, let the server decide
     return null
   }
 
-  if (!Array.isArray(categories)) return null
+  if (!taxonomy || !Array.isArray(taxonomy.categories)) return null
 
-  const cat = categories.find((c) => c.id === categoryId)
-  if (!cat || !cat.attributes) return null
+  const cat = taxonomy.categories.find((c) => c.key === categoryKey)
+  if (!cat || !Array.isArray(cat.attrs)) return null
 
-  const missing = cat.attributes
-    .filter((a) => a.required && !(a.name in suppliedAttributes))
-    .map((a) => a.name)
+  const missing = cat.attrs
+    .filter((a) => a.required && !(a.key in suppliedAttrs))
+    .map((a) => a.key)
 
   if (missing.length === 0) return null
 
   return (
-    `Hiányzó kötelező kategória-attribútumok a "${cat.name}" kategóriához: ` +
+    `Hiányzó kötelező kategória-attribútumok a "${cat.label}" kategóriához: ` +
     missing.join(', ') +
-    '. Töltsd ki ezeket az attributes mezőbe, majd próbáld újra.'
+    '. Töltsd ki ezeket az attrs mezőbe, majd próbáld újra.'
   )
 }
 
@@ -190,17 +204,19 @@ export function registerShopTools(server: McpServer, opts: HttpOptions): void {
   server.registerTool(
     'haszno_shop_list_categories',
     {
-      title: 'List shop categories',
+      title: 'List shop categories (taxonomy)',
       description:
         'Returns the full category taxonomy of the Haszno Hirdetési Piactér (marketplace). ' +
-        'Each category may include "attributes" — the fields required (or optional) when posting an ad in that category. ' +
-        'Call this before haszno_shop_create_ad to identify the correct categoryId and required attribute keys. ' +
+        'Each category has a "key" (string slug), "label" (Hungarian name), "subcategories" (array with key/label/attrs), ' +
+        'and "attrs" — the attribute definitions (key, label, type, required, options) for ads in that category. ' +
+        'Also returns "conditions" (product conditions) and "counties" (valid Hungarian county names). ' +
+        'Call this before haszno_shop_create_ad to identify the correct category.key and required attr keys. ' +
         'The Haszno Shop is completely free — there are no listing or usage fees.',
       annotations: { readOnlyHint: true, destructiveHint: false },
     },
     async () => {
       try {
-        const result = await get('/api/v1/shop/categories', opts)
+        const result = await get('/api/v1/shop/taxonomy', opts)
         return json(result)
       } catch (e) {
         return mapApiError(e, 'list_categories')
@@ -219,14 +235,20 @@ export function registerShopTools(server: McpServer, opts: HttpOptions): void {
         'Returns a paginated list of ads including their id, title, priceGross (HUF), status, images, ' +
         'and a "reserved" flag (true when an accepted reservation exists for the ad). ' +
         'The Shop is free — no fees for browsing or contacting sellers. ' +
-        'Filter by category with categoryId, full-text search with q, price range with minPrice/maxPrice.',
+        'Filter by category with cat (category key string from haszno_shop_list_categories), ' +
+        'full-text search with q, price range with min/max (HUF). ' +
+        'Sort: "uj" (newest, default), "ar_nov" (price ascending), "ar_csokk" (price descending).',
       inputSchema: {
         q: z.string().optional().describe('Full-text search query'),
-        categoryId: z.number().int().min(1).optional().describe('Filter by category ID'),
-        minPrice: z.number().int().min(0).optional().describe('Minimum price in HUF gross'),
-        maxPrice: z.number().int().min(0).optional().describe('Maximum price in HUF gross'),
-        page: z.number().int().min(1).optional().describe('Page number (default 1, page size 20)'),
-        sort: z.enum(['newest', 'price_asc', 'price_desc']).optional().describe('Sort order'),
+        cat: z.string().optional().describe('Filter by category key (e.g. "jarmuvek", "elektronika")'),
+        sub: z.string().optional().describe('Filter by subcategory key (e.g. "szemelyauto")'),
+        min: z.number().int().min(0).optional().describe('Minimum price in HUF gross'),
+        max: z.number().int().min(0).optional().describe('Maximum price in HUF gross'),
+        county: z.string().optional().describe('Filter by county name (from taxonomy counties list)'),
+        city: z.string().optional().describe('Filter by city name'),
+        cond: z.enum(['uj', 'ujszeru', 'hasznalt', 'serult']).optional().describe('Product condition filter'),
+        sort: z.enum(['uj', 'ar_nov', 'ar_csokk']).optional().describe('"uj" (newest), "ar_nov" (price asc), "ar_csokk" (price desc)'),
+        page: z.number().int().min(1).optional().describe('Page number (default 1, page size 24)'),
       },
       annotations: { readOnlyHint: true, destructiveHint: false },
     },
@@ -234,11 +256,15 @@ export function registerShopTools(server: McpServer, opts: HttpOptions): void {
       try {
         const qs = new URLSearchParams()
         if (args.q) qs.set('q', args.q)
-        if (args.categoryId != null) qs.set('categoryId', String(args.categoryId))
-        if (args.minPrice != null) qs.set('minPrice', String(args.minPrice))
-        if (args.maxPrice != null) qs.set('maxPrice', String(args.maxPrice))
-        if (args.page != null) qs.set('page', String(args.page))
+        if (args.cat) qs.set('cat', args.cat)
+        if (args.sub) qs.set('sub', args.sub)
+        if (args.min != null) qs.set('min', String(args.min))
+        if (args.max != null) qs.set('max', String(args.max))
+        if (args.county) qs.set('county', args.county)
+        if (args.city) qs.set('city', args.city)
+        if (args.cond) qs.set('cond', args.cond)
         if (args.sort) qs.set('sort', args.sort)
+        if (args.page != null) qs.set('page', String(args.page))
         const suffix = qs.toString() ? `?${qs}` : ''
         const result = await get(`/api/v1/shop/ads${suffix}`, opts)
         return json(result)
@@ -256,7 +282,7 @@ export function registerShopTools(server: McpServer, opts: HttpOptions): void {
       title: 'Get a single ad',
       description:
         'Fetches the full detail of a Haszno marketplace ad by its ID. ' +
-        'Returns all fields including images, attributes, seller info, and the "reserved" flag ' +
+        'Returns all fields including images, attributes (attrs), seller info, and the "reserved" flag ' +
         '(true when an accepted reservation exists). ' +
         'The Shop is free — browsing and contacting sellers costs nothing.',
       inputSchema: {
@@ -281,22 +307,24 @@ export function registerShopTools(server: McpServer, opts: HttpOptions): void {
     {
       title: 'Get a suggested price hint',
       description:
-        'Returns a suggested asking price for an item based on the category and optional keyword. ' +
-        'The hint is derived from recent sold and active listings in the same category. ' +
-        'Use this before calling haszno_shop_create_ad to set a realistic priceGross.',
+        'Returns a suggested asking price range (p25–p75 percentile) for a category, ' +
+        'based on at least 5 distinct sellers\' active listings. Returns null when there is not enough data. ' +
+        'Use this before calling haszno_shop_create_ad to set a realistic priceGross. ' +
+        'Pass cat (category key from haszno_shop_list_categories) and optionally sub (subcategory key).',
       inputSchema: {
-        categoryId: z.number().int().min(1).optional().describe('Category ID for the hint'),
-        q: z.string().optional().describe('Item description or keywords to refine the hint'),
+        cat: z.string().describe('Category key (e.g. "jarmuvek", "elektronika") from haszno_shop_list_categories'),
+        sub: z.string().optional().describe('Subcategory key to narrow the hint'),
+        q: z.string().optional().describe('Item description or keywords (accepted but ignored by the server)'),
       },
       annotations: { readOnlyHint: true, destructiveHint: false },
     },
     async (args) => {
       try {
         const qs = new URLSearchParams()
-        if (args.categoryId != null) qs.set('categoryId', String(args.categoryId))
+        qs.set('cat', args.cat)
+        if (args.sub) qs.set('sub', args.sub)
         if (args.q) qs.set('q', args.q)
-        const suffix = qs.toString() ? `?${qs}` : ''
-        const result = await get(`/api/v1/shop/ads/price-hint${suffix}`, opts)
+        const result = await get(`/api/v1/shop/assist/price-hint?${qs}`, opts)
         return json(result)
       } catch (e) {
         return mapApiError(e, 'price_hint')
@@ -311,23 +339,16 @@ export function registerShopTools(server: McpServer, opts: HttpOptions): void {
     {
       title: "List my own ads",
       description:
-        "Returns the authenticated user's own marketplace ads. " +
-        'Filter by status: "aktiv" (live), "fuggeszetett" (paused), "eladva" (sold), "lejart" (expired). ' +
-        'Each entry includes id, title, priceGross, status, images, reserved flag, and stats (views, inquiries). ' +
-        'Requires authentication (Bearer token or session).',
-      inputSchema: {
-        status: z.enum(['aktiv', 'fuggeszetett', 'eladva', 'lejart']).optional().describe('Filter by ad status'),
-        page: z.number().int().min(1).optional().describe('Page number (default 1)'),
-      },
+        "Returns the authenticated user's own marketplace ads (all non-deleted). " +
+        'Each entry includes id, title, priceGross, status (aktiv/szunetel/eladva), images, reserved flag, ' +
+        'and stats (views, inquiries, favorites). ' +
+        'Requires authentication (Bearer token). ' +
+        'Status values: "aktiv" (live), "szunetel" (paused), "eladva" (sold).',
       annotations: { readOnlyHint: true, destructiveHint: false },
     },
-    async (args) => {
+    async () => {
       try {
-        const qs = new URLSearchParams()
-        if (args.status) qs.set('status', args.status)
-        if (args.page != null) qs.set('page', String(args.page))
-        const suffix = qs.toString() ? `?${qs}` : ''
-        const result = await get(`/api/v1/shop/my/ads${suffix}`, opts)
+        const result = await get('/api/v1/shop/my/ads', opts)
         return json(result)
       } catch (e) {
         return mapApiError(e, 'list_my_ads')
@@ -344,10 +365,12 @@ export function registerShopTools(server: McpServer, opts: HttpOptions): void {
       description:
         'Returns messages/questions sent to your ads by potential buyers. ' +
         'Optionally filter by adId to see inquiries for a specific ad. ' +
+        'Pagination: use limit (1–200, default 50) and offset (default 0). ' +
         'Requires authentication.',
       inputSchema: {
         adId: z.number().int().min(1).optional().describe('Filter by a specific ad ID'),
-        page: z.number().int().min(1).optional().describe('Page number (default 1)'),
+        limit: z.number().int().min(1).max(200).optional().describe('Page size (default 50, max 200)'),
+        offset: z.number().int().min(0).optional().describe('Skip this many items (default 0)'),
       },
       annotations: { readOnlyHint: true, destructiveHint: false },
     },
@@ -355,7 +378,8 @@ export function registerShopTools(server: McpServer, opts: HttpOptions): void {
       try {
         const qs = new URLSearchParams()
         if (args.adId != null) qs.set('adId', String(args.adId))
-        if (args.page != null) qs.set('page', String(args.page))
+        if (args.limit != null) qs.set('limit', String(args.limit))
+        if (args.offset != null) qs.set('offset', String(args.offset))
         const suffix = qs.toString() ? `?${qs}` : ''
         const result = await get(`/api/v1/shop/my/inquiries${suffix}`, opts)
         return json(result)
@@ -372,19 +396,13 @@ export function registerShopTools(server: McpServer, opts: HttpOptions): void {
     {
       title: 'List my saved favorites',
       description:
-        'Returns the ads the authenticated user has saved as favorites. ' +
+        'Returns the active ads the authenticated user has saved as favorites. ' +
         'Requires authentication.',
-      inputSchema: {
-        page: z.number().int().min(1).optional().describe('Page number (default 1)'),
-      },
       annotations: { readOnlyHint: true, destructiveHint: false },
     },
-    async (args) => {
+    async () => {
       try {
-        const qs = new URLSearchParams()
-        if (args.page != null) qs.set('page', String(args.page))
-        const suffix = qs.toString() ? `?${qs}` : ''
-        const result = await get(`/api/v1/shop/my/favorites${suffix}`, opts)
+        const result = await get('/api/v1/shop/my/favorites', opts)
         return json(result)
       } catch (e) {
         return mapApiError(e, 'list_favorites')
@@ -437,8 +455,10 @@ export function registerShopTools(server: McpServer, opts: HttpOptions): void {
       description:
         'Uploads an image for use in a Haszno marketplace ad. ' +
         'Provide either an absolute local file path ("filePath") OR a base64-encoded image with its MIME type ("base64" + "mimeType"). ' +
-        'Returns an "url" field — pass this URL in the "images" array of haszno_shop_create_ad or haszno_shop_update_ad. ' +
-        'Supported MIME types: image/jpeg, image/png, image/webp. ' +
+        'Returns an object with "id" (numeric image ID) and "url" (path like /api/shop/images/<id>). ' +
+        '— Pass url in the "images" array of haszno_shop_create_ad or haszno_shop_update_ad. ' +
+        '— Pass id in the "imageIds" array of haszno_shop_suggest_from_photos. ' +
+        'Supported MIME types: image/jpeg, image/png, image/webp. Maximum size: 700 KB. ' +
         'The Haszno Shop is free — no fees for uploading images.',
       inputSchema: {
         filePath: z.string().optional().describe(
@@ -464,7 +484,7 @@ export function registerShopTools(server: McpServer, opts: HttpOptions): void {
       // ── Security constants ────────────────────────────────────────────────
       const ALLOWED_EXTS = new Set(['jpg', 'jpeg', 'png', 'webp'])
       const ALLOWED_MIMES = new Set(['image/jpeg', 'image/png', 'image/webp'])
-      const MAX_SIZE_BYTES = 20 * 1024 * 1024 // 20 MB
+      const MAX_SIZE_BYTES = 700 * 1024 // 700 KB — matches the server limit
 
       // Magic-byte signatures for JPEG, PNG, and WebP.
       function detectMimeFromBytes(buf: Buffer): string | null {
@@ -480,8 +500,8 @@ export function registerShopTools(server: McpServer, opts: HttpOptions): void {
         return null
       }
 
-      let blob: Blob
-      let filename: string
+      let buffer: Buffer
+      let detectedMime: string
 
       if (args.filePath) {
         // Extension whitelist — reject anything not in the allowed set early.
@@ -490,7 +510,6 @@ export function registerShopTools(server: McpServer, opts: HttpOptions): void {
           return mkErr(`Csak JPEG, PNG és WebP fájlok tölthetők fel (kapott kiterjesztés: .${ext || 'ismeretlen'}).`)
         }
 
-        let buffer: Buffer
         try {
           buffer = fs.readFileSync(args.filePath)
         } catch (e) {
@@ -499,21 +518,19 @@ export function registerShopTools(server: McpServer, opts: HttpOptions): void {
 
         // Size cap.
         if (buffer.length > MAX_SIZE_BYTES) {
-          return mkErr(`A fájl mérete (${(buffer.length / 1024 / 1024).toFixed(1)} MB) meghaladja a 20 MB-os határt.`)
+          return mkErr(`A fájl mérete (${(buffer.length / 1024).toFixed(0)} KB) meghaladja a 700 KB-os határt.`)
         }
 
         // Magic-byte check — must match the declared extension.
-        const detectedMime = detectMimeFromBytes(buffer)
-        if (!detectedMime) {
+        const mime = detectMimeFromBytes(buffer)
+        if (!mime) {
           return mkErr('A fájl nem felismerhető képformátum (JPEG, PNG vagy WebP szükséges).')
         }
         const extMime: Record<string, string> = { jpg: 'image/jpeg', jpeg: 'image/jpeg', png: 'image/png', webp: 'image/webp' }
-        if (detectedMime !== extMime[ext]) {
-          return mkErr(`A fájl tartalma (${detectedMime}) nem egyezik a kiterjesztéssel (.${ext}).`)
+        if (mime !== extMime[ext]) {
+          return mkErr(`A fájl tartalma (${mime}) nem egyezik a kiterjesztéssel (.${ext}).`)
         }
-
-        blob = new Blob([buffer], { type: detectedMime })
-        filename = args.filePath.split('/').pop() ?? 'image'
+        detectedMime = mime
       } else {
         // base64 path (checked above: args.base64 is set, args.mimeType is set)
         const declaredMime = args.mimeType as string
@@ -521,7 +538,6 @@ export function registerShopTools(server: McpServer, opts: HttpOptions): void {
           return mkErr(`Nem támogatott MIME típus: ${declaredMime}. Csak image/jpeg, image/png és image/webp elfogadott.`)
         }
 
-        let buffer: Buffer
         try {
           buffer = Buffer.from(args.base64 as string, 'base64')
         } catch (e) {
@@ -530,32 +546,28 @@ export function registerShopTools(server: McpServer, opts: HttpOptions): void {
 
         // Size cap.
         if (buffer.length > MAX_SIZE_BYTES) {
-          return mkErr(`A kép mérete (${(buffer.length / 1024 / 1024).toFixed(1)} MB) meghaladja a 20 MB-os határt.`)
+          return mkErr(`A kép mérete (${(buffer.length / 1024).toFixed(0)} KB) meghaladja a 700 KB-os határt.`)
         }
 
         // Magic-byte check — must match declared MIME type.
-        const detectedMime = detectMimeFromBytes(buffer)
-        if (!detectedMime) {
+        const mime = detectMimeFromBytes(buffer)
+        if (!mime) {
           return mkErr('A base64 adat nem felismerhető képformátum (JPEG, PNG vagy WebP szükséges).')
         }
-        if (detectedMime !== declaredMime) {
-          return mkErr(`A kép valódi formátuma (${detectedMime}) nem egyezik a megadott mimeType értékkel (${declaredMime}).`)
+        if (mime !== declaredMime) {
+          return mkErr(`A kép valódi formátuma (${mime}) nem egyezik a megadott mimeType értékkel (${declaredMime}).`)
         }
-
-        blob = new Blob([buffer], { type: declaredMime })
-        const extMap: Record<string, string> = {
-          'image/jpeg': 'jpg',
-          'image/png': 'png',
-          'image/webp': 'webp',
-        }
-        filename = `upload.${extMap[declaredMime] ?? 'bin'}`
+        detectedMime = mime
       }
 
-      const formData = new FormData()
-      formData.append('image', blob, filename)
-
       try {
-        const result = await uploadMultipart<{ url: string }>('/api/v1/shop/my/images', formData, opts)
+        // POST /api/shop/images — raw binary body, Content-Type = image/jpeg|png|webp
+        const result = await uploadRawBinary<{ id: number; url: string }>(
+          '/api/v1/shop/images',
+          buffer,
+          detectedMime,
+          opts,
+        )
         return json(result)
       } catch (e) {
         return mapApiError(e, 'upload_image')
@@ -570,20 +582,22 @@ export function registerShopTools(server: McpServer, opts: HttpOptions): void {
     {
       title: 'AI pre-fill ad from uploaded photos',
       description:
-        'Sends uploaded image URLs to the Haszno AI to generate a suggested ad title, description, ' +
-        'category, price, and category-specific attributes. ' +
-        'Upload images first with haszno_shop_upload_image to get the URLs, then pass them here. ' +
-        'The result is a suggestion only — review it before passing it to haszno_shop_create_ad.',
+        'Sends uploaded image IDs to the Haszno AI to generate a suggested ad title, description, ' +
+        'category, condition, and category-specific attributes. ' +
+        'Upload images first with haszno_shop_upload_image to get the numeric "id" of each image, ' +
+        'then pass those IDs here (1–3 images). ' +
+        'The result is a suggestion only — review it before passing it to haszno_shop_create_ad. ' +
+        'Returns error 503 when the AI feature is not enabled on this server.',
       inputSchema: {
-        imageUrls: z.array(z.string().url()).min(1).max(5).describe(
-          'Image URLs from haszno_shop_upload_image (1–5 URLs)',
+        imageIds: z.array(z.number().int().min(1)).min(1).max(3).describe(
+          'Numeric image IDs from haszno_shop_upload_image (1–3 IDs)',
         ),
       },
       annotations: { readOnlyHint: false, destructiveHint: false, idempotentHint: false },
     },
     async (args) => {
       try {
-        const result = await post('/api/v1/shop/my/ads/suggest', { imageUrls: args.imageUrls }, opts)
+        const result = await post('/api/v1/shop/assist/from-photos', { imageIds: args.imageIds }, opts)
         return json(result)
       } catch (e) {
         return mapApiError(e, 'suggest_from_photos')
@@ -603,24 +617,36 @@ export function registerShopTools(server: McpServer, opts: HttpOptions): void {
         'Only call this when the user has explicitly confirmed they want to post the ad. ' +
         'The Haszno Shop is completely free — there are no listing fees. ' +
         'Before calling this tool: ' +
-        '(1) call haszno_shop_list_categories to find the right categoryId and its required attributes; ' +
-        '(2) call haszno_shop_upload_image for each photo and collect the returned URLs; ' +
-        '(3) call haszno_shop_price_hint to suggest a priceGross. ' +
-        'This tool validates required category attributes before sending — if any are missing it will tell you exactly what is needed.',
+        '(1) call haszno_shop_list_categories to get the category key, subcategory key, required attrs, and valid county names; ' +
+        '(2) call haszno_shop_upload_image for each photo and collect the returned "url" values; ' +
+        '(3) call haszno_shop_price_hint for a price suggestion. ' +
+        'Image URLs must be in the format /api/shop/images/<id> (returned by haszno_shop_upload_image). ' +
+        'This tool validates required category attributes before sending.',
       inputSchema: {
-        title: z.string().min(3).max(200).describe('Ad title (3–200 characters)'),
-        description: z.string().max(5000).optional().describe('Ad description (optional, max 5000 chars)'),
-        priceGross: z.number().int().min(1).describe('Asking price in HUF gross'),
-        categoryId: z.number().int().min(1).describe('Category ID from haszno_shop_list_categories'),
-        attributes: z.record(z.string(), z.unknown()).optional().describe(
-          'Category-specific attributes (e.g. { "condition": "hasznalt", "brand": "Samsung" }). ' +
+        category: z.string().describe('Category key (e.g. "jarmuvek") from haszno_shop_list_categories'),
+        subcategory: z.string().optional().nullable().describe('Subcategory key (optional, e.g. "szemelya" for "jarmuvek")'),
+        title: z.string().min(5).max(120).describe('Ad title (5–120 characters)'),
+        description: z.string().max(5000).describe('Ad description (max 5000 chars)'),
+        priceGross: z.number().int().min(1).max(2_000_000_000).nullable().describe('Asking price in HUF gross, or null for "price on request"'),
+        negotiable: z.boolean().describe('Whether the price is negotiable'),
+        condition: z.enum(['uj', 'ujszeru', 'hasznalt', 'serult']).describe(
+          'Product condition: "uj" (new), "ujszeru" (like new), "hasznalt" (used), "serult" (damaged)',
+        ),
+        county: z.string().describe('Hungarian county name from haszno_shop_list_categories counties list'),
+        city: z.string().min(1).max(80).describe('City name'),
+        images: z.array(z.string()).max(10).optional().describe(
+          'Image URLs from haszno_shop_upload_image (format: /api/shop/images/<id>, max 10)',
+        ),
+        attrs: z.record(z.string(), z.union([z.string(), z.number(), z.boolean()])).optional().describe(
+          'Category-specific attributes (e.g. { "allapot": "hasznalt", "marka": "Samsung" }). ' +
           'Required attributes depend on the category — call haszno_shop_list_categories to see them.',
         ),
-        images: z.array(z.string().url()).max(10).optional().describe(
-          'Image URLs from haszno_shop_upload_image (max 10)',
-        ),
-        phone: z.string().max(50).optional().describe('Contact phone number'),
-        showPhone: z.boolean().optional().describe('Whether to display the phone number publicly (default false)'),
+        contactName: z.string().min(1).max(80).describe('Seller contact name'),
+        contactPhone: z.string().optional().nullable().describe('Contact phone number (optional)'),
+        contactEmail: z.string().email().describe('Seller contact e-mail address'),
+        showPhone: z.boolean().describe('Whether to display the phone number publicly'),
+        resellable: z.boolean().describe('Allow partner shops to list this ad in their own webshops'),
+        partnerCommissionPct: z.number().min(0).max(30).describe('Commission % to offer partner shops (0–30)'),
         confirm: z.literal(true).describe(
           'Must be exactly true. This posts a real, public ad — only set this after the user confirms.',
         ),
@@ -629,25 +655,34 @@ export function registerShopTools(server: McpServer, opts: HttpOptions): void {
     },
     async (args) => {
       // Validate category attributes before sending
-      const attrs = (args.attributes ?? {}) as Record<string, unknown>
-      const validationError = await validateCategoryAttributes(args.categoryId, attrs, opts)
+      const attrs = (args.attrs ?? {}) as Record<string, unknown>
+      const validationError = await validateCategoryAttributes(args.category, attrs, opts)
       if (validationError) {
         return mkErr(validationError)
       }
 
       const body = {
+        category: args.category,
+        subcategory: args.subcategory ?? null,
         title: args.title,
         description: args.description,
         priceGross: args.priceGross,
-        categoryId: args.categoryId,
-        attributes: args.attributes,
-        images: args.images,
-        phone: args.phone,
+        negotiable: args.negotiable,
+        condition: args.condition,
+        county: args.county,
+        city: args.city,
+        images: args.images ?? [],
+        attrs: args.attrs ?? {},
+        contactName: args.contactName,
+        contactPhone: args.contactPhone ?? null,
+        contactEmail: args.contactEmail,
         showPhone: args.showPhone,
+        resellable: args.resellable,
+        partnerCommissionPct: args.partnerCommissionPct,
       }
 
       try {
-        const result = await post('/api/v1/shop/my/ads', body, opts)
+        const result = await post('/api/v1/shop/ads', body, opts)
         return json(result)
       } catch (e) {
         return mapApiError(e, 'create_ad')
@@ -662,26 +697,68 @@ export function registerShopTools(server: McpServer, opts: HttpOptions): void {
     {
       title: 'Update an existing ad',
       description:
-        'Updates the fields of an existing Haszno marketplace ad. ' +
-        'Only pass the fields you want to change — omitted fields remain unchanged. ' +
+        'Updates an existing Haszno marketplace ad (PUT — the server replaces the full ad). ' +
+        'This tool first fetches the current ad values, merges in only the fields you provide, ' +
+        'then sends the complete updated body. Only pass the fields you want to change. ' +
         'The ad must belong to the authenticated user. ' +
+        'Image URLs must be in the format /api/shop/images/<id>. ' +
         'The Haszno Shop is free.',
       inputSchema: {
         id: z.number().int().min(1).describe('Ad ID to update'),
-        title: z.string().min(3).max(200).optional(),
+        category: z.string().optional().describe('Category key'),
+        subcategory: z.string().optional().nullable(),
+        title: z.string().min(5).max(120).optional(),
         description: z.string().max(5000).optional(),
-        priceGross: z.number().int().min(1).optional().describe('New asking price in HUF gross'),
-        attributes: z.record(z.string(), z.unknown()).optional(),
-        images: z.array(z.string().url()).max(10).optional(),
-        phone: z.string().max(50).optional(),
+        priceGross: z.number().int().min(1).max(2_000_000_000).nullable().optional().describe('New asking price in HUF gross, or null for "price on request"'),
+        negotiable: z.boolean().optional(),
+        condition: z.enum(['uj', 'ujszeru', 'hasznalt', 'serult']).optional(),
+        county: z.string().optional(),
+        city: z.string().min(1).max(80).optional(),
+        images: z.array(z.string()).max(10).optional().describe('Image URLs (/api/shop/images/<id> format)'),
+        attrs: z.record(z.string(), z.union([z.string(), z.number(), z.boolean()])).optional(),
+        contactName: z.string().min(1).max(80).optional(),
+        contactPhone: z.string().optional().nullable(),
+        contactEmail: z.string().email().optional(),
         showPhone: z.boolean().optional(),
+        resellable: z.boolean().optional(),
+        partnerCommissionPct: z.number().min(0).max(30).optional(),
       },
       annotations: { readOnlyHint: false, destructiveHint: false, idempotentHint: false },
     },
     async (args) => {
-      const { id, ...body } = args
+      const { id, ...updates } = args
+
+      // Fetch current ad to build the full PUT body
+      let current: Record<string, unknown>
       try {
-        const result = await patch(`/api/v1/shop/my/ads/${id}`, body, opts)
+        current = await get<Record<string, unknown>>(`/api/v1/shop/my/ads/${id}`, opts)
+      } catch (e) {
+        return mapApiError(e, `update_ad (fetch current state for id=${id})`)
+      }
+
+      // Merge caller-supplied fields over current values
+      const body: Record<string, unknown> = {
+        category: updates.category ?? current['category'],
+        subcategory: 'subcategory' in updates ? updates.subcategory : current['subcategory'],
+        title: updates.title ?? current['title'],
+        description: updates.description ?? current['description'],
+        priceGross: 'priceGross' in updates ? updates.priceGross : current['priceGross'],
+        negotiable: updates.negotiable ?? current['negotiable'],
+        condition: updates.condition ?? current['condition'],
+        county: updates.county ?? current['county'],
+        city: updates.city ?? current['city'],
+        images: updates.images ?? current['images'],
+        attrs: updates.attrs ?? current['attrs'],
+        contactName: updates.contactName ?? current['contactName'],
+        contactPhone: 'contactPhone' in updates ? updates.contactPhone : current['contactPhone'],
+        contactEmail: updates.contactEmail ?? current['contactEmail'],
+        showPhone: updates.showPhone ?? current['showPhone'],
+        resellable: updates.resellable ?? current['resellable'],
+        partnerCommissionPct: updates.partnerCommissionPct ?? current['partnerCommissionPct'],
+      }
+
+      try {
+        const result = await put(`/api/v1/shop/ads/${id}`, body, opts)
         return json(result)
       } catch (e) {
         return mapApiError(e, 'update_ad')
@@ -694,20 +771,24 @@ export function registerShopTools(server: McpServer, opts: HttpOptions): void {
   server.registerTool(
     'haszno_shop_set_ad_status',
     {
-      title: 'Pause or activate an ad',
+      title: 'Change ad status (pause, reactivate, or delete)',
       description:
-        'Changes an ad\'s visibility. ' +
-        '"fuggeszetett" hides the ad from public search (paused); "aktiv" makes it visible again. ' +
+        'Changes an ad\'s status. ' +
+        '"szunetel" hides the ad from public search (paused); ' +
+        '"aktiv" makes it visible again (also resets the expiry timer); ' +
+        '"torolve" soft-deletes the ad permanently (irreversible). ' +
         'The ad must belong to the authenticated user.',
       inputSchema: {
         id: z.number().int().min(1).describe('Ad ID'),
-        status: z.enum(['aktiv', 'fuggeszetett']).describe('"aktiv" to show, "fuggeszetett" to hide'),
+        status: z.enum(['aktiv', 'szunetel', 'torolve']).describe(
+          '"aktiv" to show, "szunetel" to pause, "torolve" to permanently delete',
+        ),
       },
       annotations: { readOnlyHint: false, destructiveHint: false, idempotentHint: true },
     },
     async (args) => {
       try {
-        const result = await post(`/api/v1/shop/my/ads/${args.id}/status`, { status: args.status }, opts)
+        const result = await post(`/api/v1/shop/ads/${args.id}/status`, { status: args.status }, opts)
         return json(result)
       } catch (e) {
         return mapApiError(e, 'set_ad_status')
@@ -729,7 +810,7 @@ export function registerShopTools(server: McpServer, opts: HttpOptions): void {
         'The Haszno Shop is free — there are no sales fees.',
       inputSchema: {
         id: z.number().int().min(1).describe('Ad ID'),
-        soldPriceGross: z.number().int().min(1).optional().describe(
+        soldPriceGross: z.number().int().min(1).optional().nullable().describe(
           'Actual sale price in HUF gross (optional, for your records)',
         ),
         confirm: z.literal(true).describe(
@@ -742,7 +823,7 @@ export function registerShopTools(server: McpServer, opts: HttpOptions): void {
       try {
         const body: Record<string, unknown> = {}
         if (args.soldPriceGross != null) body['soldPriceGross'] = args.soldPriceGross
-        const result = await post(`/api/v1/shop/my/ads/${args.id}/sold`, body, opts)
+        const result = await post(`/api/v1/shop/ads/${args.id}/sold`, body, opts)
         return json(result)
       } catch (e) {
         return mapApiError(e, 'mark_sold')
@@ -757,7 +838,7 @@ export function registerShopTools(server: McpServer, opts: HttpOptions): void {
     {
       title: 'Renew / bump an ad',
       description:
-        'Renews an ad, resetting its expiry timer and bumping it back to the top of search results. ' +
+        'Renews an ad, resetting its 60-day expiry timer and bumping it back to the top of search results. ' +
         'Use this for ads that are about to expire or have fallen in ranking. ' +
         'The Haszno Shop is free — renewal has no cost.',
       inputSchema: {
@@ -767,7 +848,7 @@ export function registerShopTools(server: McpServer, opts: HttpOptions): void {
     },
     async (args) => {
       try {
-        const result = await post(`/api/v1/shop/my/ads/${args.id}/renew`, {}, opts)
+        const result = await post(`/api/v1/shop/ads/${args.id}/renew`, {}, opts)
         return json(result)
       } catch (e) {
         return mapApiError(e, 'renew_ad')
@@ -784,16 +865,26 @@ export function registerShopTools(server: McpServer, opts: HttpOptions): void {
       description:
         'Sends a message or question to the seller of an ad. ' +
         'The seller will be notified and can respond through Haszno. ' +
+        'Requires name, email, and message (at least 5 characters). ' +
         'The Haszno Shop is free.',
       inputSchema: {
         adId: z.number().int().min(1).describe('Ad ID to send the inquiry to'),
-        message: z.string().min(1).max(2000).describe('Your message or question for the seller'),
+        name: z.string().min(1).max(80).describe('Your name'),
+        email: z.string().email().describe('Your e-mail address'),
+        phone: z.string().max(50).optional().nullable().describe('Your phone number (optional)'),
+        message: z.string().min(5).max(2000).describe('Your message or question for the seller (min 5 characters)'),
       },
       annotations: { readOnlyHint: false, destructiveHint: false, idempotentHint: false },
     },
     async (args) => {
       try {
-        const result = await post(`/api/v1/shop/ads/${args.adId}/inquiries`, { message: args.message }, opts)
+        const body: Record<string, unknown> = {
+          name: args.name,
+          email: args.email,
+          message: args.message,
+        }
+        if (args.phone != null) body['phone'] = args.phone
+        const result = await post(`/api/v1/shop/ads/${args.adId}/inquiries`, body, opts)
         return json(result)
       } catch (e) {
         return mapApiError(e, 'send_inquiry')
@@ -809,7 +900,7 @@ export function registerShopTools(server: McpServer, opts: HttpOptions): void {
       title: 'Save or remove a favorite',
       description:
         'Saves or removes an ad from your favorites list. ' +
-        'Set save=true to add to favorites, save=false to remove. ' +
+        'Set save=true to add to favorites (PUT /favorite), save=false to remove (DELETE /favorite). ' +
         'The Haszno Shop is free.',
       inputSchema: {
         adId: z.number().int().min(1).describe('Ad ID'),
@@ -821,9 +912,9 @@ export function registerShopTools(server: McpServer, opts: HttpOptions): void {
       try {
         let result: unknown
         if (args.save) {
-          result = await post(`/api/v1/shop/ads/${args.adId}/favorites`, {}, opts)
+          result = await put(`/api/v1/shop/ads/${args.adId}/favorite`, {}, opts)
         } else {
-          result = await del(`/api/v1/shop/ads/${args.adId}/favorites`, opts)
+          result = await del(`/api/v1/shop/ads/${args.adId}/favorite`, opts)
         }
         return json(result)
       } catch (e) {
@@ -888,27 +979,19 @@ export function registerShopTools(server: McpServer, opts: HttpOptions): void {
         'Accepts or declines a pending reservation on one of your ads (seller action). ' +
         'action="accept": marks the reservation as "elfogadva" (accepted); ' +
         'the buyer\'s contact details become visible to you in the reservation. ' +
-        'You may optionally set a heldUntil deadline (ISO-8601) by which the buyer must complete the purchase. ' +
         'action="decline": marks the reservation as "elutasitva" (declined); ' +
         'the ad remains active for other buyers. ' +
         'The Haszno Shop is free — accepting a reservation does NOT create a payment.',
       inputSchema: {
         id: z.number().int().min(1).describe('Reservation ID'),
         action: z.enum(['accept', 'decline']).describe('"accept" or "decline"'),
-        heldUntil: z.string().datetime().optional().nullable().describe(
-          'Optional ISO-8601 deadline for the buyer to complete the deal (accept only)',
-        ),
       },
       annotations: { readOnlyHint: false, destructiveHint: false, idempotentHint: false },
     },
     async (args) => {
       try {
         const path = `/api/v1/shop/my/reservations/${args.id}/${args.action}`
-        const body: Record<string, unknown> = {}
-        if (args.action === 'accept' && args.heldUntil !== undefined) {
-          body['heldUntil'] = args.heldUntil
-        }
-        const result = await post(path, body, opts)
+        const result = await post(path, {}, opts)
         return json(result)
       } catch (e) {
         return mapApiError(e, `respond_reservation(${args.action})`)

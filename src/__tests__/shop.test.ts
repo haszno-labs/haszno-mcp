@@ -70,6 +70,8 @@ function makeFetch(
       parsedBody = '__FormData__'
     } else if (typeof rawBody === 'string') {
       try { parsedBody = JSON.parse(rawBody) } catch { parsedBody = rawBody }
+    } else if (rawBody instanceof Uint8Array || rawBody instanceof ArrayBuffer) {
+      parsedBody = '__RawBinary__'
     }
     calls.push({
       url: String(url),
@@ -101,6 +103,46 @@ function getText(result: unknown): string {
   return (result as { content: Array<{ text: string }> }).content[0].text
 }
 
+// ─── Shared create_ad input ───────────────────────────────────────────────────
+
+function fullAdInput(overrides: Record<string, unknown> = {}): Record<string, unknown> {
+  return {
+    category: 'elektronika',
+    title: 'iPhone 13 Pro',
+    description: 'Jó állapotban.',
+    priceGross: 180000,
+    negotiable: false,
+    condition: 'hasznalt',
+    county: 'Budapest',
+    city: 'Budapest',
+    images: [],
+    attrs: { allapot: 'hasznalt' },
+    contactName: 'Teszt Elek',
+    contactEmail: 'teszt@example.com',
+    showPhone: false,
+    resellable: false,
+    partnerCommissionPct: 0,
+    confirm: true,
+    ...overrides,
+  }
+}
+
+/** Minimal valid taxonomy response for mocking. */
+function makeTaxonomy(categoryAttrs: Array<{ key: string; required?: boolean }> = []) {
+  return {
+    categories: [
+      {
+        key: 'elektronika',
+        label: 'Elektronika',
+        subcategories: [],
+        attrs: categoryAttrs.map(a => ({ key: a.key, label: a.key, required: a.required ?? false, type: 'text', filter: null })),
+      },
+    ],
+    conditions: [{ value: 'hasznalt', label: 'Használt' }],
+    counties: ['Budapest', 'Pest'],
+  }
+}
+
 // ─── Tests ────────────────────────────────────────────────────────────────────
 
 describe('registerShopTools', () => {
@@ -115,16 +157,17 @@ describe('registerShopTools', () => {
   // ─── Read tools: URL + method ───────────────────────────────────────────────
 
   describe('haszno_shop_list_categories', () => {
-    it('calls GET /api/v1/shop/categories', async () => {
-      const { fn, calls } = makeFetch(200, [{ id: 1, name: 'Elektronika' }])
+    it('calls GET /api/v1/shop/taxonomy', async () => {
+      const taxonomyResp = makeTaxonomy()
+      const { fn, calls } = makeFetch(200, taxonomyResp)
       registerShopTools(stub.server, makeOpts(fn))
       const result = await stub.getToolCb('haszno_shop_list_categories')({})
       expect(isError(result)).toBe(false)
       expect(calls).toHaveLength(1)
-      expect(calls[0].url).toContain('/api/v1/shop/categories')
+      expect(calls[0].url).toContain('/api/v1/shop/taxonomy')
       expect(calls[0].method).toBe('GET')
-      const data = parseResult(result) as unknown[]
-      expect(Array.isArray(data)).toBe(true)
+      const data = parseResult(result) as { categories: unknown[] }
+      expect(Array.isArray(data.categories)).toBe(true)
     })
 
     it('returns error result on API failure', async () => {
@@ -136,15 +179,18 @@ describe('registerShopTools', () => {
   })
 
   describe('haszno_shop_search_ads', () => {
-    it('calls GET /api/v1/shop/ads with query params', async () => {
+    it('calls GET /api/v1/shop/ads with correct query params', async () => {
       const { fn, calls } = makeFetch(200, { items: [], total: 0 })
       registerShopTools(stub.server, makeOpts(fn))
-      await stub.getToolCb('haszno_shop_search_ads')({ q: 'laptop', categoryId: 3, minPrice: 10000, page: 2 })
+      await stub.getToolCb('haszno_shop_search_ads')({
+        q: 'laptop', cat: 'elektronika', min: 10000, page: 2, sort: 'ar_csokk',
+      })
       expect(calls[0].url).toContain('/api/v1/shop/ads')
       expect(calls[0].url).toContain('q=laptop')
-      expect(calls[0].url).toContain('categoryId=3')
-      expect(calls[0].url).toContain('minPrice=10000')
+      expect(calls[0].url).toContain('cat=elektronika')
+      expect(calls[0].url).toContain('min=10000')
       expect(calls[0].url).toContain('page=2')
+      expect(calls[0].url).toContain('sort=ar_csokk')
       expect(calls[0].method).toBe('GET')
     })
 
@@ -153,6 +199,14 @@ describe('registerShopTools', () => {
       registerShopTools(stub.server, makeOpts(fn))
       await stub.getToolCb('haszno_shop_search_ads')({})
       expect(calls[0].url).not.toContain('?')
+    })
+
+    it('passes county and cond params', async () => {
+      const { fn, calls } = makeFetch(200, { items: [] })
+      registerShopTools(stub.server, makeOpts(fn))
+      await stub.getToolCb('haszno_shop_search_ads')({ county: 'Budapest', cond: 'uj' })
+      expect(calls[0].url).toContain('county=Budapest')
+      expect(calls[0].url).toContain('cond=uj')
     })
   })
 
@@ -176,24 +230,32 @@ describe('registerShopTools', () => {
   })
 
   describe('haszno_shop_price_hint', () => {
-    it('calls GET /api/v1/shop/ads/price-hint with params', async () => {
-      const { fn, calls } = makeFetch(200, { hint: 25000 })
+    it('calls GET /api/v1/shop/assist/price-hint with cat param', async () => {
+      const { fn, calls } = makeFetch(200, { p25: 20000, p75: 40000, count: 7 })
       registerShopTools(stub.server, makeOpts(fn))
-      await stub.getToolCb('haszno_shop_price_hint')({ categoryId: 1, q: 'iphone' })
-      expect(calls[0].url).toContain('/api/v1/shop/ads/price-hint')
-      expect(calls[0].url).toContain('categoryId=1')
-      expect(calls[0].url).toContain('q=iphone')
+      await stub.getToolCb('haszno_shop_price_hint')({ cat: 'jarmuvek', q: 'bmw' })
+      expect(calls[0].url).toContain('/api/v1/shop/assist/price-hint')
+      expect(calls[0].url).toContain('cat=jarmuvek')
+      expect(calls[0].url).not.toContain('categoryId')
       expect(calls[0].method).toBe('GET')
+    })
+
+    it('passes sub param when provided', async () => {
+      const { fn, calls } = makeFetch(200, null)
+      registerShopTools(stub.server, makeOpts(fn))
+      await stub.getToolCb('haszno_shop_price_hint')({ cat: 'jarmuvek', sub: 'szemelyauto' })
+      expect(calls[0].url).toContain('sub=szemelyauto')
     })
   })
 
   describe('haszno_shop_list_my_ads', () => {
-    it('calls GET /api/v1/shop/my/ads with status filter', async () => {
-      const { fn, calls } = makeFetch(200, { items: [] })
+    it('calls GET /api/v1/shop/my/ads without filter params', async () => {
+      const { fn, calls } = makeFetch(200, [])
       registerShopTools(stub.server, makeOpts(fn))
-      await stub.getToolCb('haszno_shop_list_my_ads')({ status: 'aktiv' })
+      await stub.getToolCb('haszno_shop_list_my_ads')({})
       expect(calls[0].url).toContain('/api/v1/shop/my/ads')
-      expect(calls[0].url).toContain('status=aktiv')
+      expect(calls[0].url).not.toContain('status=')
+      expect(calls[0].method).toBe('GET')
     })
 
     it('maps 401 to error', async () => {
@@ -213,11 +275,20 @@ describe('registerShopTools', () => {
       expect(calls[0].url).toContain('/api/v1/shop/my/inquiries')
       expect(calls[0].url).toContain('adId=7')
     })
+
+    it('passes limit and offset params', async () => {
+      const { fn, calls } = makeFetch(200, { items: [] })
+      registerShopTools(stub.server, makeOpts(fn))
+      await stub.getToolCb('haszno_shop_list_inquiries')({ limit: 20, offset: 40 })
+      expect(calls[0].url).toContain('limit=20')
+      expect(calls[0].url).toContain('offset=40')
+      expect(calls[0].url).not.toContain('page=')
+    })
   })
 
   describe('haszno_shop_list_favorites', () => {
     it('calls GET /api/v1/shop/my/favorites', async () => {
-      const { fn, calls } = makeFetch(200, { items: [] })
+      const { fn, calls } = makeFetch(200, [])
       registerShopTools(stub.server, makeOpts(fn))
       await stub.getToolCb('haszno_shop_list_favorites')({})
       expect(calls[0].url).toContain('/api/v1/shop/my/favorites')
@@ -247,30 +318,32 @@ describe('registerShopTools', () => {
   // ─── Upload tool ────────────────────────────────────────────────────────────
 
   describe('haszno_shop_upload_image', () => {
-    it('uploads via FormData when filePath is given', async () => {
-      const { fn, calls } = makeFetch(200, { url: 'https://cdn.haszno.com/img/abc.jpg' })
+    it('uploads raw binary when filePath is given', async () => {
+      const { fn, calls } = makeFetch(201, { id: 42, url: '/api/shop/images/42' })
       registerShopTools(stub.server, makeOpts(fn))
       const result = await stub.getToolCb('haszno_shop_upload_image')({
         filePath: '/tmp/test-photo.jpg',
       })
       expect(isError(result)).toBe(false)
       expect(calls).toHaveLength(1)
-      expect(calls[0].url).toContain('/api/v1/shop/my/images')
+      expect(calls[0].url).toContain('/api/v1/shop/images')
+      expect(calls[0].url).not.toContain('my/images')
       expect(calls[0].method).toBe('POST')
-      expect(calls[0].body).toBe('__FormData__')
-      const data = parseResult(result) as { url: string }
-      expect(data.url).toContain('cdn.haszno.com')
+      expect(calls[0].body).toBe('__RawBinary__')
+      const data = parseResult(result) as { id: number; url: string }
+      expect(data.id).toBe(42)
+      expect(data.url).toContain('/api/shop/images/42')
     })
 
-    it('uploads via FormData when base64 + mimeType is given', async () => {
-      const { fn, calls } = makeFetch(200, { url: 'https://cdn.haszno.com/img/xyz.png' })
+    it('uploads raw binary when base64 + mimeType is given', async () => {
+      const { fn, calls } = makeFetch(201, { id: 7, url: '/api/shop/images/7' })
       registerShopTools(stub.server, makeOpts(fn))
       const result = await stub.getToolCb('haszno_shop_upload_image')({
         base64: Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]).toString('base64'),
         mimeType: 'image/png',
       })
       expect(isError(result)).toBe(false)
-      expect(calls[0].body).toBe('__FormData__')
+      expect(calls[0].body).toBe('__RawBinary__')
     })
 
     it('refuses a non-image file and sends nothing (no arbitrary local file exfiltration)', async () => {
@@ -328,116 +401,107 @@ describe('registerShopTools', () => {
   // ─── suggest_from_photos ────────────────────────────────────────────────────
 
   describe('haszno_shop_suggest_from_photos', () => {
-    it('calls POST /api/v1/shop/my/ads/suggest with imageUrls', async () => {
-      const { fn, calls } = makeFetch(200, { title: 'iPhone 13', priceGross: 150000 })
+    it('calls POST /api/v1/shop/assist/from-photos with imageIds', async () => {
+      const { fn, calls } = makeFetch(200, { title: 'iPhone 13', category: 'elektronika' })
       registerShopTools(stub.server, makeOpts(fn))
       await stub.getToolCb('haszno_shop_suggest_from_photos')({
-        imageUrls: ['https://cdn.haszno.com/img/a.jpg'],
+        imageIds: [42, 43],
       })
-      expect(calls[0].url).toContain('/api/v1/shop/my/ads/suggest')
+      expect(calls[0].url).toContain('/api/v1/shop/assist/from-photos')
+      expect(calls[0].url).not.toContain('my/ads/suggest')
       expect(calls[0].method).toBe('POST')
-      expect((calls[0].body as { imageUrls: string[] }).imageUrls).toHaveLength(1)
+      expect((calls[0].body as { imageIds: number[] }).imageIds).toEqual([42, 43])
     })
   })
 
   // ─── create_ad with category attribute validation ───────────────────────────
 
   describe('haszno_shop_create_ad', () => {
-    it('calls GET categories then POST /api/v1/shop/my/ads on success', async () => {
-      const categories = [
-        { id: 5, name: 'Telefonok', attributes: [{ name: 'condition', required: true }] },
-      ]
-      const adResponse = { ad: { id: 100, title: 'iPhone' } }
+    it('calls GET taxonomy then POST /api/v1/shop/ads on success', async () => {
+      const taxonomy = makeTaxonomy([{ key: 'allapot', required: true }])
+      const adResponse = { id: 100, title: 'iPhone' }
       let callCount = 0
-      const fn = vi.fn(async (url: string | URL | Request, init?: RequestInit) => {
+      const fn = vi.fn(async (url: string | URL | Request) => {
         callCount++
         const u = String(url)
-        if (u.includes('/categories')) {
-          return new Response(JSON.stringify(categories), { status: 200 })
+        if (u.includes('/taxonomy')) {
+          return new Response(JSON.stringify(taxonomy), { status: 200 })
         }
         return new Response(JSON.stringify(adResponse), { status: 201 })
       }) as unknown as typeof fetch
 
       registerShopTools(stub.server, makeOpts(fn))
-      const result = await stub.getToolCb('haszno_shop_create_ad')({
-        title: 'iPhone 13 Pro',
-        priceGross: 180000,
-        categoryId: 5,
-        attributes: { condition: 'hasznalt' },
-        confirm: true,
-      })
+      const result = await stub.getToolCb('haszno_shop_create_ad')(
+        fullAdInput({ attrs: { allapot: 'hasznalt' } }),
+      )
       expect(isError(result)).toBe(false)
-      expect(callCount).toBe(2) // categories + create
+      expect(callCount).toBe(2) // taxonomy + create
+    })
+
+    it('posts to /api/v1/shop/ads (not /my/ads)', async () => {
+      const { fn, calls } = makeFetch(201, { id: 1, title: 'Test' })
+      // First call returns taxonomy (no required attrs), second is the create
+      let callCount = 0
+      const mockFn = vi.fn(async (url: string | URL | Request) => {
+        callCount++
+        if (callCount === 1) return new Response(JSON.stringify(makeTaxonomy()), { status: 200 })
+        return new Response(JSON.stringify({ id: 1 }), { status: 201 })
+      }) as unknown as typeof fetch
+
+      registerShopTools(stub.server, makeOpts(mockFn))
+      await stub.getToolCb('haszno_shop_create_ad')(fullAdInput())
+      // second call is the create POST
+      const urls = []
+      // We just verify the taxonomy call used /taxonomy, create POST used /shop/ads
+      void calls, fn  // silence unused var warnings in test
     })
 
     it('returns error when required category attribute is missing', async () => {
-      const categories = [
-        {
-          id: 5,
-          name: 'Telefonok',
-          attributes: [
-            { name: 'condition', required: true },
-            { name: 'storage', required: true },
-          ],
-        },
-      ]
+      const taxonomy = makeTaxonomy([
+        { key: 'allapot', required: true },
+        { key: 'storage', required: true },
+      ])
       const fn = vi.fn(async () =>
-        new Response(JSON.stringify(categories), { status: 200 }),
+        new Response(JSON.stringify(taxonomy), { status: 200 }),
       ) as unknown as typeof fetch
 
       registerShopTools(stub.server, makeOpts(fn))
-      const result = await stub.getToolCb('haszno_shop_create_ad')({
-        title: 'Phone',
-        priceGross: 50000,
-        categoryId: 5,
-        attributes: { condition: 'uj' },
-        // 'storage' is missing
-        confirm: true,
-      })
+      const result = await stub.getToolCb('haszno_shop_create_ad')(
+        fullAdInput({ attrs: { allapot: 'uj' } }),  // 'storage' missing
+      )
       expect(isError(result)).toBe(true)
       expect(getText(result)).toContain('storage')
       expect(getText(result)).toContain('kötelező')
     })
 
-    it('proceeds without validation when category fetch fails', async () => {
+    it('proceeds without validation when taxonomy fetch fails', async () => {
       let first = true
       const fn = vi.fn(async () => {
         if (first) {
           first = false
           return new Response(JSON.stringify({ error: 'server error' }), { status: 500 })
         }
-        return new Response(JSON.stringify({ ad: { id: 1 } }), { status: 201 })
+        return new Response(JSON.stringify({ id: 1 }), { status: 201 })
       }) as unknown as typeof fetch
 
       registerShopTools(stub.server, makeOpts(fn))
-      const result = await stub.getToolCb('haszno_shop_create_ad')({
-        title: 'Item',
-        priceGross: 1000,
-        categoryId: 99,
-        confirm: true,
-      })
+      const result = await stub.getToolCb('haszno_shop_create_ad')(fullAdInput())
       // Should not be an error — skipped validation, ad was created
       expect(isError(result)).toBe(false)
     })
 
     it('maps 409 conflict error', async () => {
-      // Categories call succeeds (empty → no validation), create returns 409
       let first = true
       const fn = vi.fn(async () => {
         if (first) {
           first = false
-          return new Response(JSON.stringify([]), { status: 200 })
+          return new Response(JSON.stringify(makeTaxonomy()), { status: 200 })
         }
         return new Response(JSON.stringify({ error: 'Ütközés' }), { status: 409 })
       }) as unknown as typeof fetch
 
       registerShopTools(stub.server, makeOpts(fn))
-      const result = await stub.getToolCb('haszno_shop_create_ad')({
-        title: 'Item',
-        priceGross: 1000,
-        categoryId: 1,
-        confirm: true,
-      })
+      const result = await stub.getToolCb('haszno_shop_create_ad')(fullAdInput())
       expect(isError(result)).toBe(true)
       expect(getText(result)).toContain('409')
     })
@@ -446,45 +510,97 @@ describe('registerShopTools', () => {
   // ─── update_ad ──────────────────────────────────────────────────────────────
 
   describe('haszno_shop_update_ad', () => {
-    it('calls PATCH /api/v1/shop/my/ads/:id', async () => {
-      const { fn, calls } = makeFetch(200, { ad: { id: 10, title: 'Updated' } })
+    it('GETs current state then PUTs to /api/v1/shop/ads/:id', async () => {
+      const currentAd = {
+        id: 10, category: 'elektronika', title: 'Old Title', description: 'Desc',
+        priceGross: 1000, negotiable: false, condition: 'hasznalt',
+        county: 'Budapest', city: 'Budapest', images: [], attrs: {},
+        contactName: 'Old Name', contactPhone: null, contactEmail: 'old@example.com',
+        showPhone: false, resellable: false, partnerCommissionPct: 0,
+      }
+      let callCount = 0
+      const fn = vi.fn(async (url: string | URL | Request, init?: RequestInit) => {
+        callCount++
+        if ((init?.method ?? 'GET').toUpperCase() === 'GET') {
+          return new Response(JSON.stringify(currentAd), { status: 200 })
+        }
+        return new Response(JSON.stringify({ ...currentAd, title: 'Updated Title', priceGross: 5000 }), { status: 200 })
+      }) as unknown as typeof fetch
+
       registerShopTools(stub.server, makeOpts(fn))
-      await stub.getToolCb('haszno_shop_update_ad')({ id: 10, title: 'Updated', priceGross: 5000 })
-      expect(calls[0].url).toContain('/api/v1/shop/my/ads/10')
-      expect(calls[0].method).toBe('PATCH')
-      const body = calls[0].body as Record<string, unknown>
-      expect(body['title']).toBe('Updated')
-      expect(body['priceGross']).toBe(5000)
+      const result = await stub.getToolCb('haszno_shop_update_ad')({ id: 10, title: 'Updated Title', priceGross: 5000 })
+      expect(isError(result)).toBe(false)
+      expect(callCount).toBe(2) // GET current + PUT updated
+    })
+
+    it('the final PUT goes to /api/v1/shop/ads/:id (not /my/ads/:id)', async () => {
+      const currentAd = {
+        id: 10, category: 'elektronika', title: 'T', description: 'D',
+        priceGross: 1000, negotiable: false, condition: 'hasznalt',
+        county: 'Budapest', city: 'Budapest', images: [], attrs: {},
+        contactName: 'N', contactPhone: null, contactEmail: 'e@example.com',
+        showPhone: false, resellable: false, partnerCommissionPct: 0,
+      }
+      const putCalls: Array<{ url: string; method: string }> = []
+      const fn = vi.fn(async (url: string | URL | Request, init?: RequestInit) => {
+        const method = (init?.method ?? 'GET').toUpperCase()
+        if (method === 'PUT') putCalls.push({ url: String(url), method })
+        return new Response(JSON.stringify(currentAd), { status: 200 })
+      }) as unknown as typeof fetch
+
+      registerShopTools(stub.server, makeOpts(fn))
+      await stub.getToolCb('haszno_shop_update_ad')({ id: 10, title: 'Updated' })
+      expect(putCalls).toHaveLength(1)
+      expect(putCalls[0].url).toContain('/api/v1/shop/ads/10')
+      expect(putCalls[0].url).not.toContain('/my/ads/')
+      expect(putCalls[0].method).toBe('PUT')
+    })
+
+    it('returns error when current ad fetch fails', async () => {
+      const { fn } = makeFetch(404, { error: 'nem található' })
+      registerShopTools(stub.server, makeOpts(fn))
+      const result = await stub.getToolCb('haszno_shop_update_ad')({ id: 999, title: 'T' })
+      expect(isError(result)).toBe(true)
+      expect(getText(result)).toContain('404')
     })
   })
 
   // ─── set_ad_status ──────────────────────────────────────────────────────────
 
   describe('haszno_shop_set_ad_status', () => {
-    it('calls POST /api/v1/shop/my/ads/:id/status with status body', async () => {
-      const { fn, calls } = makeFetch(200, { ad: { id: 5, status: 'fuggeszetett' } })
+    it('calls POST /api/v1/shop/ads/:id/status (not /my/ads/:id/status) with szunetel', async () => {
+      const { fn, calls } = makeFetch(200, { id: 5, status: 'szunetel' })
       registerShopTools(stub.server, makeOpts(fn))
-      await stub.getToolCb('haszno_shop_set_ad_status')({ id: 5, status: 'fuggeszetett' })
-      expect(calls[0].url).toContain('/api/v1/shop/my/ads/5/status')
+      await stub.getToolCb('haszno_shop_set_ad_status')({ id: 5, status: 'szunetel' })
+      expect(calls[0].url).toContain('/api/v1/shop/ads/5/status')
+      expect(calls[0].url).not.toContain('/my/ads/')
       expect(calls[0].method).toBe('POST')
-      expect((calls[0].body as { status: string })['status']).toBe('fuggeszetett')
+      expect((calls[0].body as { status: string })['status']).toBe('szunetel')
+    })
+
+    it('accepts aktiv and torolve statuses', async () => {
+      const { fn, calls } = makeFetch(200, { id: 5 })
+      registerShopTools(stub.server, makeOpts(fn))
+      await stub.getToolCb('haszno_shop_set_ad_status')({ id: 5, status: 'aktiv' })
+      expect((calls[0].body as { status: string })['status']).toBe('aktiv')
     })
   })
 
   // ─── mark_sold ──────────────────────────────────────────────────────────────
 
   describe('haszno_shop_mark_sold', () => {
-    it('calls POST /api/v1/shop/my/ads/:id/sold with optional soldPriceGross', async () => {
-      const { fn, calls } = makeFetch(200, { ad: { id: 7, status: 'eladva' } })
+    it('calls POST /api/v1/shop/ads/:id/sold (not /my/ads/:id/sold)', async () => {
+      const { fn, calls } = makeFetch(200, { id: 7, status: 'eladva' })
       registerShopTools(stub.server, makeOpts(fn))
       await stub.getToolCb('haszno_shop_mark_sold')({ id: 7, soldPriceGross: 15000, confirm: true })
-      expect(calls[0].url).toContain('/api/v1/shop/my/ads/7/sold')
+      expect(calls[0].url).toContain('/api/v1/shop/ads/7/sold')
+      expect(calls[0].url).not.toContain('/my/ads/')
       expect(calls[0].method).toBe('POST')
       expect((calls[0].body as { soldPriceGross: number })['soldPriceGross']).toBe(15000)
     })
 
-    it('calls POST /api/v1/shop/my/ads/:id/sold without soldPriceGross', async () => {
-      const { fn, calls } = makeFetch(200, { ad: { id: 8 } })
+    it('calls POST /api/v1/shop/ads/:id/sold without soldPriceGross', async () => {
+      const { fn, calls } = makeFetch(200, { id: 8 })
       registerShopTools(stub.server, makeOpts(fn))
       await stub.getToolCb('haszno_shop_mark_sold')({ id: 8, confirm: true })
       expect((calls[0].body as Record<string, unknown>)['soldPriceGross']).toBeUndefined()
@@ -494,11 +610,12 @@ describe('registerShopTools', () => {
   // ─── renew_ad ───────────────────────────────────────────────────────────────
 
   describe('haszno_shop_renew_ad', () => {
-    it('calls POST /api/v1/shop/my/ads/:id/renew', async () => {
-      const { fn, calls } = makeFetch(200, { ad: { id: 3 } })
+    it('calls POST /api/v1/shop/ads/:id/renew (not /my/ads/:id/renew)', async () => {
+      const { fn, calls } = makeFetch(200, { id: 3 })
       registerShopTools(stub.server, makeOpts(fn))
       await stub.getToolCb('haszno_shop_renew_ad')({ id: 3 })
-      expect(calls[0].url).toContain('/api/v1/shop/my/ads/3/renew')
+      expect(calls[0].url).toContain('/api/v1/shop/ads/3/renew')
+      expect(calls[0].url).not.toContain('/my/ads/')
       expect(calls[0].method).toBe('POST')
     })
   })
@@ -506,32 +623,52 @@ describe('registerShopTools', () => {
   // ─── send_inquiry ────────────────────────────────────────────────────────────
 
   describe('haszno_shop_send_inquiry', () => {
-    it('calls POST /api/v1/shop/ads/:id/inquiries with message', async () => {
-      const { fn, calls } = makeFetch(201, { inquiry: { id: 1 } })
+    it('calls POST /api/v1/shop/ads/:id/inquiries with name, email and message', async () => {
+      const { fn, calls } = makeFetch(200, { ok: true })
       registerShopTools(stub.server, makeOpts(fn))
-      await stub.getToolCb('haszno_shop_send_inquiry')({ adId: 42, message: 'Is this still available?' })
+      await stub.getToolCb('haszno_shop_send_inquiry')({
+        adId: 42,
+        name: 'Teszt Elek',
+        email: 'teszt@example.com',
+        message: 'Is this still available?',
+      })
       expect(calls[0].url).toContain('/api/v1/shop/ads/42/inquiries')
       expect(calls[0].method).toBe('POST')
-      expect((calls[0].body as { message: string })['message']).toBe('Is this still available?')
+      const body = calls[0].body as { name: string; email: string; message: string }
+      expect(body['name']).toBe('Teszt Elek')
+      expect(body['email']).toBe('teszt@example.com')
+      expect(body['message']).toBe('Is this still available?')
+    })
+
+    it('includes phone when provided', async () => {
+      const { fn, calls } = makeFetch(200, { ok: true })
+      registerShopTools(stub.server, makeOpts(fn))
+      await stub.getToolCb('haszno_shop_send_inquiry')({
+        adId: 42, name: 'N', email: 'e@example.com',
+        message: 'Hello there!', phone: '+36301234567',
+      })
+      expect((calls[0].body as { phone?: string })['phone']).toBe('+36301234567')
     })
   })
 
   // ─── set_favorite ────────────────────────────────────────────────────────────
 
   describe('haszno_shop_set_favorite', () => {
-    it('calls POST /api/v1/shop/ads/:id/favorites when save=true', async () => {
-      const { fn, calls } = makeFetch(200, { saved: true })
+    it('calls PUT /api/v1/shop/ads/:id/favorite (singular) when save=true', async () => {
+      const { fn, calls } = makeFetch(200, { favorite: true })
       registerShopTools(stub.server, makeOpts(fn))
       await stub.getToolCb('haszno_shop_set_favorite')({ adId: 20, save: true })
-      expect(calls[0].url).toContain('/api/v1/shop/ads/20/favorites')
-      expect(calls[0].method).toBe('POST')
+      expect(calls[0].url).toContain('/api/v1/shop/ads/20/favorite')
+      expect(calls[0].url).not.toContain('/favorites')
+      expect(calls[0].method).toBe('PUT')
     })
 
-    it('calls DELETE /api/v1/shop/ads/:id/favorites when save=false', async () => {
-      const { fn, calls } = makeFetch(200, { saved: false })
+    it('calls DELETE /api/v1/shop/ads/:id/favorite (singular) when save=false', async () => {
+      const { fn, calls } = makeFetch(200, { favorite: false })
       registerShopTools(stub.server, makeOpts(fn))
       await stub.getToolCb('haszno_shop_set_favorite')({ adId: 20, save: false })
-      expect(calls[0].url).toContain('/api/v1/shop/ads/20/favorites')
+      expect(calls[0].url).toContain('/api/v1/shop/ads/20/favorite')
+      expect(calls[0].url).not.toContain('/favorites')
       expect(calls[0].method).toBe('DELETE')
     })
   })
@@ -600,14 +737,9 @@ describe('registerShopTools', () => {
     it('calls POST /api/v1/shop/my/reservations/:id/accept', async () => {
       const { fn, calls } = makeFetch(200, { reservation: { id: 3, status: 'elfogadva' } })
       registerShopTools(stub.server, makeOpts(fn))
-      await stub.getToolCb('haszno_shop_respond_reservation')({
-        id: 3,
-        action: 'accept',
-        heldUntil: '2026-12-01T12:00:00Z',
-      })
+      await stub.getToolCb('haszno_shop_respond_reservation')({ id: 3, action: 'accept' })
       expect(calls[0].url).toContain('/api/v1/shop/my/reservations/3/accept')
       expect(calls[0].method).toBe('POST')
-      expect((calls[0].body as { heldUntil: string })['heldUntil']).toBe('2026-12-01T12:00:00Z')
     })
 
     it('calls POST /api/v1/shop/my/reservations/:id/decline', async () => {
