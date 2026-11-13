@@ -164,6 +164,38 @@ haszno_account_configure(apiUrl: "https://haszno.com", apiKey: "haszno_xxxx", co
 - `haszno_ideas_ai_description` — AI termékleírás generátor
 - `haszno_ideas_fill_keywords` — hiányzó trendkulcsszavak pótlása
 
+### Hirdetési Piactér (`haszno_shop_*`)
+
+A Haszno Shop (Hirdetési Piactér) **teljesen ingyenes** — sem feladásért, sem használatért nem kell fizetni.
+A foglalás nem fizetés: a vételár és az átadás közvetlenül a vevő és az eladó között zajlik.
+
+**Olvasó eszközök (mellékhatás nélkül)**
+- `haszno_shop_list_categories` — kategóriataxonómia (`key`, `attrs` kategóriánként, `conditions`, `counties`)
+- `haszno_shop_search_ads` — nyilvános hirdetések keresése (`q`, `cat`, `sub`, `min`, `max`, `county`, `city`, `cond`, `sort`, `page`); rendezés: `uj` (legújabb), `ar_nov` (ár növekvő), `ar_csokk` (ár csökkenő)
+- `haszno_shop_get_ad` — egyetlen hirdetés részletei a `reserved` jelzővel
+- `haszno_shop_price_hint` — javasolt árkeret (p25–p75) `cat` (kategória kulcs) és opcionális `sub` alkategória alapján
+- `haszno_shop_list_my_ads` — saját, nem törölt hirdetések
+- `haszno_shop_list_inquiries` — vevők által küldött kérdések (`adId?`, `limit`, `offset`)
+- `haszno_shop_list_favorites` — mentett kedvenc hirdetések
+- `haszno_shop_list_reservations` — foglalásaim `buyer` (alapértelmezett) vagy `seller` nézőpontból
+
+**Író eszközök (hitelesítés szükséges; a create/reserve/complete megköveteli a `confirm: true` mezőt)**
+- `haszno_shop_upload_image` — kép feltöltése (`filePath` vagy `base64` + `mimeType`), max 700 KB, visszaad `{ id, url }`
+- `haszno_shop_suggest_from_photos` — AI előtöltés feltöltött kép-azonosítókból (`imageIds: number[]`, 1–3 db)
+- `haszno_shop_create_ad` — új hirdetés feladása (kötelező kategóriaattribútumokat ellenőrzi) *(confirm: true)*
+- `haszno_shop_update_ad` — meglévő hirdetés szerkesztése (lekéri a jelenlegi adatokat, majd PUT-tal frissíti)
+- `haszno_shop_set_ad_status` — `aktiv` (megjelenítés/újraaktiválás), `szunetel` (szüneteltetés), `torolve` (végleges törlés)
+- `haszno_shop_mark_sold` — hirdetés eladottnak jelölése (visszafordíthatatlan) *(confirm: true)*
+- `haszno_shop_renew_ad` — 60 napos lejárat visszaállítása, hirdetés a keresési lista tetejére kerül
+- `haszno_shop_send_inquiry` — kérdés küldése az eladónak (`adId`, `name`, `email`, `message`)
+- `haszno_shop_set_favorite` — kedvenc mentése (`save: true`) vagy törlése (`save: false`)
+- `haszno_shop_reserve_ad` — foglalás leadása (`message?`, `offerPriceGross?`, `phone?`; nem fizetés) *(confirm: true)*
+- `haszno_shop_respond_reservation` — foglalás `accept` (elfogadás) vagy `decline` (elutasítás) (eladó)
+- `haszno_shop_cancel_reservation` — saját foglalás lemondása, státusz `visszavonva` (vevő)
+- `haszno_shop_complete_reservation` — foglalás teljesítettnek jelölése → hirdetés `eladva` lesz (eladó, visszafordíthatatlan) *(confirm: true)*
+
+**Foglalás-státuszok:** `fuggoben` (függőben), `elfogadva` (elfogadva), `elutasitva` (elutasítva/automatikusan elutasítva), `visszavonva` (vevő mondta le), `teljesitve` (teljesítve), `lejart` (foglalás lejárt)
+
 ---
 
 ## Fejlesztés

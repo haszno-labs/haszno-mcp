@@ -165,6 +165,38 @@ haszno_account_configure(apiUrl: "https://haszno.com", apiKey: "haszno_xxxx", co
 - `haszno_ideas_ai_description` — AI product description generator
 - `haszno_ideas_fill_keywords` — fill missing trend keywords
 
+### Marketplace / Shop (`haszno_shop_*`)
+
+The Haszno Shop (Hirdetési Piactér) is **completely free** — no listing or usage fees.
+Reserving is not paying: payment and handover happen directly between buyer and seller.
+
+**Read (no side effects)**
+- `haszno_shop_list_categories` — full category taxonomy (categories with `key`, `attrs` per category, `conditions`, `counties`)
+- `haszno_shop_search_ads` — search public ads (`q`, `cat`, `sub`, `min`, `max`, `county`, `city`, `cond`, `sort`, `page`); sort values: `uj` (newest), `ar_nov` (price asc), `ar_csokk` (price desc)
+- `haszno_shop_get_ad` — single ad detail including the `reserved` flag
+- `haszno_shop_price_hint` — suggested price range (p25–p75) for a `cat` (category key) and optional `sub` subcategory key
+- `haszno_shop_list_my_ads` — your own non-deleted ads
+- `haszno_shop_list_inquiries` — messages buyers sent to your ads (`adId?`, `limit`, `offset`)
+- `haszno_shop_list_favorites` — your saved favorite ads
+- `haszno_shop_list_reservations` — your reservations as `buyer` (default) or `seller`
+
+**Write (require authentication; create/reserve/complete require `confirm: true`)**
+- `haszno_shop_upload_image` — upload a local file (`filePath`) or base64 image (`base64` + `mimeType`), max 700 KB, returns `{ id, url }`
+- `haszno_shop_suggest_from_photos` — AI pre-fill ad fields from uploaded image IDs (`imageIds: number[]`, 1–3)
+- `haszno_shop_create_ad` — post a new ad (validates required category attrs before sending) *(confirm: true)*
+- `haszno_shop_update_ad` — edit an existing ad (fetches current state then PUTs merged body)
+- `haszno_shop_set_ad_status` — `aktiv` (show/reactivate), `szunetel` (pause), or `torolve` (permanently delete)
+- `haszno_shop_mark_sold` — mark an ad sold (irreversible) *(confirm: true)*
+- `haszno_shop_renew_ad` — reset 60-day expiry and bump ad to top of search
+- `haszno_shop_send_inquiry` — send a question to the seller (`adId`, `name`, `email`, `message`)
+- `haszno_shop_set_favorite` — save (`save: true`) or remove (`save: false`) a favorite
+- `haszno_shop_reserve_ad` — place a reservation on an ad (not a payment; `message?`, `offerPriceGross?`, `phone?`) *(confirm: true)*
+- `haszno_shop_respond_reservation` — `accept` or `decline` a reservation (seller)
+- `haszno_shop_cancel_reservation` — cancel your own reservation, sets status `visszavonva` (buyer)
+- `haszno_shop_complete_reservation` — mark a reservation fulfilled → ad becomes `eladva` (seller, irreversible) *(confirm: true)*
+
+**Reservation statuses:** `fuggoben` (pending), `elfogadva` (accepted), `elutasitva` (declined/auto-declined), `visszavonva` (cancelled by buyer), `teljesitve` (completed), `lejart` (hold expired)
+
 ---
 
 ## Development
