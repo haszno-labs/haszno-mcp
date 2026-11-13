@@ -23,7 +23,7 @@ vi.mock('node:fs', async (importOriginal) => {
     readFileSync: vi.fn().mockImplementation(() => {
       if (fsMock.readFileSyncError) throw fsMock.readFileSyncError
       if (fsMock.readFileSyncResult) return fsMock.readFileSyncResult
-      return Buffer.from('fake-image-bytes')
+      return Buffer.from([0xff, 0xd8, 0xff, 0xe0, 0x00, 0x10, 0x4a, 0x46])
     }),
   }
 })
@@ -266,11 +266,23 @@ describe('registerShopTools', () => {
       const { fn, calls } = makeFetch(200, { url: 'https://cdn.haszno.com/img/xyz.png' })
       registerShopTools(stub.server, makeOpts(fn))
       const result = await stub.getToolCb('haszno_shop_upload_image')({
-        base64: Buffer.from('fake-png-data').toString('base64'),
+        base64: Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]).toString('base64'),
         mimeType: 'image/png',
       })
       expect(isError(result)).toBe(false)
       expect(calls[0].body).toBe('__FormData__')
+    })
+
+    it('refuses a non-image file and sends nothing (no arbitrary local file exfiltration)', async () => {
+      const { fn, calls } = makeFetch(200, {})
+      registerShopTools(stub.server, makeOpts(fn))
+      const byExt = await stub.getToolCb('haszno_shop_upload_image')({ filePath: '/home/user/.ssh/id_rsa' })
+      expect(isError(byExt)).toBe(true)
+      fsMock.readFileSyncResult = Buffer.from('-----BEGIN OPENSSH PRIVATE KEY-----')
+      const byBytes = await stub.getToolCb('haszno_shop_upload_image')({ filePath: '/tmp/renamed.jpg' })
+      fsMock.readFileSyncResult = null
+      expect(isError(byBytes)).toBe(true)
+      expect(calls).toHaveLength(0)
     })
 
     it('returns error when neither filePath nor base64 is given', async () => {
