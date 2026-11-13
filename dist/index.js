@@ -23,12 +23,12 @@ function isShopToken(key) {
   return !!key?.startsWith(SHOP_TOKEN_PREFIX);
 }
 function buildAuthHeader(opts) {
-  const key = opts.apiKey ?? process.env["HASZNO_API_TOKEN"] ?? process.env["HASZNO_API_KEY"] ?? process.env["ARFUTAR_API_KEY"];
+  const key = opts.noEnvFallback ? opts.apiKey : opts.apiKey ?? process.env["HASZNO_API_TOKEN"] ?? process.env["HASZNO_API_KEY"] ?? process.env["ARFUTAR_API_KEY"];
   if (key) {
     if (isShopToken(key)) return { Authorization: `Bearer ${key}` };
     return { "x-api-key": key };
   }
-  const basic = opts.basicAuth ?? process.env["HASZNO_BASIC"] ?? process.env["ARFUTAR_BASIC"];
+  const basic = opts.noEnvFallback ? opts.basicAuth : opts.basicAuth ?? process.env["HASZNO_BASIC"] ?? process.env["ARFUTAR_BASIC"];
   if (basic) {
     const encoded = Buffer.from(basic).toString("base64");
     return { Authorization: `Basic ${encoded}` };
@@ -39,7 +39,7 @@ async function sleep(ms) {
   return new Promise((r) => setTimeout(r, ms));
 }
 async function request(method, path3, body, opts) {
-  const baseUrl = (opts.baseUrl ?? process.env["HASZNO_API_URL"] ?? process.env["ARFUTAR_API_URL"] ?? "https://haszno.com").replace(/\/$/, "");
+  const baseUrl = (opts.baseUrl ?? (opts.noEnvFallback ? void 0 : process.env["HASZNO_API_URL"] ?? process.env["ARFUTAR_API_URL"]) ?? "https://haszno.com").replace(/\/$/, "");
   const url = `${baseUrl}${path3}`;
   const fetchFn = opts.fetch ?? fetch;
   const maxRetries = opts.maxRetries ?? 3;
@@ -48,7 +48,7 @@ async function request(method, path3, body, opts) {
   const headers = {
     "Content-Type": "application/json",
     "Accept": "application/json",
-    "User-Agent": "haszno-mcp/0.3.0",
+    "User-Agent": "haszno-mcp/0.4.0",
     ...buildAuthHeader(opts)
   };
   let lastError;
@@ -2181,16 +2181,16 @@ function mapApiError(e, context) {
   return mkErr2(`${context}: ${String(e)}`);
 }
 function buildBearerHeaders(opts) {
-  const key = opts.apiKey ?? process.env["HASZNO_API_TOKEN"] ?? process.env["HASZNO_API_KEY"] ?? process.env["ARFUTAR_API_KEY"];
+  const key = opts.noEnvFallback ? opts.apiKey : opts.apiKey ?? process.env["HASZNO_API_TOKEN"] ?? process.env["HASZNO_API_KEY"] ?? process.env["ARFUTAR_API_KEY"];
   const headers = {
     Accept: "application/json",
-    "User-Agent": "haszno-mcp/0.3.0"
+    "User-Agent": "haszno-mcp/0.4.0"
   };
   if (key) {
     if (key.startsWith(SHOP_TOKEN_PREFIX)) headers["Authorization"] = `Bearer ${key}`;
     else headers["x-api-key"] = key;
   } else {
-    const basic = opts.basicAuth ?? process.env["HASZNO_BASIC"] ?? process.env["ARFUTAR_BASIC"];
+    const basic = opts.noEnvFallback ? opts.basicAuth : opts.basicAuth ?? process.env["HASZNO_BASIC"] ?? process.env["ARFUTAR_BASIC"];
     if (basic) {
       headers["Authorization"] = `Basic ${Buffer.from(basic).toString("base64")}`;
     }
@@ -2198,7 +2198,7 @@ function buildBearerHeaders(opts) {
   return headers;
 }
 async function uploadRawBinary(path3, bytes, mimeType, opts) {
-  const baseUrl = (opts.baseUrl ?? process.env["HASZNO_API_URL"] ?? process.env["ARFUTAR_API_URL"] ?? "https://haszno.com").replace(/\/$/, "");
+  const baseUrl = (opts.baseUrl ?? (opts.noEnvFallback ? void 0 : process.env["HASZNO_API_URL"] ?? process.env["ARFUTAR_API_URL"]) ?? "https://haszno.com").replace(/\/$/, "");
   const fetchFn = opts.fetch ?? fetch;
   const response = await fetchFn(`${baseUrl}${path3}`, {
     method: "POST",
@@ -2235,7 +2235,10 @@ async function validateCategoryAttributes(categoryKey, suppliedAttrs, opts) {
   if (missing.length === 0) return null;
   return `Hi\xE1nyz\xF3 k\xF6telez\u0151 kateg\xF3ria-attrib\xFAtumok a "${cat.label}" kateg\xF3ri\xE1hoz: ` + missing.join(", ") + ". T\xF6ltsd ki ezeket az attrs mez\u0151be, majd pr\xF3b\xE1ld \xFAjra.";
 }
-function registerShopTools(server, opts) {
+function registerShopTools(server, opts, flags = {}) {
+  if (flags.remote) {
+    opts = { ...opts, noEnvFallback: true };
+  }
   server.registerTool(
     "haszno_shop_list_categories",
     {
@@ -2420,102 +2423,132 @@ function registerShopTools(server, opts) {
       }
     }
   );
-  server.registerTool(
-    "haszno_shop_upload_image",
-    {
-      title: "Upload an ad image",
-      description: 'Uploads an image for use in a Haszno marketplace ad. Provide either an absolute local file path ("filePath") OR a base64-encoded image with its MIME type ("base64" + "mimeType"). Returns an object with "id" (numeric image ID) and "url" (path like /api/shop/images/<id>). \u2014 Pass url in the "images" array of haszno_shop_create_ad or haszno_shop_update_ad. \u2014 Pass id in the "imageIds" array of haszno_shop_suggest_from_photos. Supported MIME types: image/jpeg, image/png, image/webp. Maximum size: 700 KB. The Haszno Shop is free \u2014 no fees for uploading images.',
-      inputSchema: {
-        filePath: z12.string().optional().describe(
-          "Absolute path to a local image file (e.g. /home/user/photo.jpg). Provide this OR base64/mimeType."
-        ),
-        base64: z12.string().optional().describe(
-          "Base64-encoded image data (without the data: URI prefix). Provide together with mimeType."
-        ),
-        mimeType: z12.string().optional().describe(
-          "MIME type for base64 input: image/jpeg, image/png, or image/webp."
-        )
-      },
-      annotations: { readOnlyHint: false, destructiveHint: false, idempotentHint: false }
-    },
-    async (args) => {
-      if (!args.filePath && !args.base64) {
-        return mkErr2("Adj meg vagy filePath-t (abszol\xFAt f\xE1jl\xFAtvonal) vagy base64 + mimeType p\xE1rt.");
-      }
-      if (args.base64 && !args.mimeType) {
-        return mkErr2("base64 megad\xE1sakor mimeType is sz\xFCks\xE9ges (pl. image/jpeg).");
-      }
-      const ALLOWED_EXTS = /* @__PURE__ */ new Set(["jpg", "jpeg", "png", "webp"]);
-      const ALLOWED_MIMES = /* @__PURE__ */ new Set(["image/jpeg", "image/png", "image/webp"]);
-      const MAX_SIZE_BYTES = 700 * 1024;
-      function detectMimeFromBytes(buf) {
-        if (buf.length < 4) return null;
-        if (buf[0] === 255 && buf[1] === 216 && buf[2] === 255) return "image/jpeg";
-        if (buf[0] === 137 && buf[1] === 80 && buf[2] === 78 && buf[3] === 71) return "image/png";
-        if (buf.length >= 12 && buf[0] === 82 && buf[1] === 73 && buf[2] === 70 && buf[3] === 70 && buf[8] === 87 && buf[9] === 69 && buf[10] === 66 && buf[11] === 80) {
-          return "image/webp";
-        }
-        return null;
-      }
-      let buffer;
-      let detectedMime;
-      if (args.filePath) {
-        const ext = args.filePath.split(".").pop()?.toLowerCase() ?? "";
-        if (!ALLOWED_EXTS.has(ext)) {
-          return mkErr2(`Csak JPEG, PNG \xE9s WebP f\xE1jlok t\xF6lthet\u0151k fel (kapott kiterjeszt\xE9s: .${ext || "ismeretlen"}).`);
-        }
-        try {
-          buffer = fs2.readFileSync(args.filePath);
-        } catch (e) {
-          return mkErr2(`Nem siker\xFClt beolvasni a f\xE1jlt: ${String(e)}`);
-        }
-        if (buffer.length > MAX_SIZE_BYTES) {
-          return mkErr2(`A f\xE1jl m\xE9rete (${(buffer.length / 1024).toFixed(0)} KB) meghaladja a 700 KB-os hat\xE1rt.`);
-        }
-        const mime = detectMimeFromBytes(buffer);
-        if (!mime) {
-          return mkErr2("A f\xE1jl nem felismerhet\u0151 k\xE9pform\xE1tum (JPEG, PNG vagy WebP sz\xFCks\xE9ges).");
-        }
-        const extMime = { jpg: "image/jpeg", jpeg: "image/jpeg", png: "image/png", webp: "image/webp" };
-        if (mime !== extMime[ext]) {
-          return mkErr2(`A f\xE1jl tartalma (${mime}) nem egyezik a kiterjeszt\xE9ssel (.${ext}).`);
-        }
-        detectedMime = mime;
-      } else {
-        const declaredMime = args.mimeType;
-        if (!ALLOWED_MIMES.has(declaredMime)) {
-          return mkErr2(`Nem t\xE1mogatott MIME t\xEDpus: ${declaredMime}. Csak image/jpeg, image/png \xE9s image/webp elfogadott.`);
-        }
-        try {
-          buffer = Buffer.from(args.base64, "base64");
-        } catch (e) {
-          return mkErr2(`\xC9rv\xE9nytelen base64 adat: ${String(e)}`);
-        }
-        if (buffer.length > MAX_SIZE_BYTES) {
-          return mkErr2(`A k\xE9p m\xE9rete (${(buffer.length / 1024).toFixed(0)} KB) meghaladja a 700 KB-os hat\xE1rt.`);
-        }
-        const mime = detectMimeFromBytes(buffer);
-        if (!mime) {
-          return mkErr2("A base64 adat nem felismerhet\u0151 k\xE9pform\xE1tum (JPEG, PNG vagy WebP sz\xFCks\xE9ges).");
-        }
-        if (mime !== declaredMime) {
-          return mkErr2(`A k\xE9p val\xF3di form\xE1tuma (${mime}) nem egyezik a megadott mimeType \xE9rt\xE9kkel (${declaredMime}).`);
-        }
-        detectedMime = mime;
-      }
-      try {
-        const result = await uploadRawBinary(
-          "/api/v1/shop/images",
-          buffer,
-          detectedMime,
-          opts
-        );
-        return json2(result);
-      } catch (e) {
-        return mapApiError(e, "upload_image");
-      }
+  const ALLOWED_EXTS_UPLOAD = /* @__PURE__ */ new Set(["jpg", "jpeg", "png", "webp"]);
+  const ALLOWED_MIMES_UPLOAD = /* @__PURE__ */ new Set(["image/jpeg", "image/png", "image/webp"]);
+  const MAX_SIZE_BYTES_UPLOAD = 700 * 1024;
+  function detectMimeFromBytes(buf) {
+    if (buf.length < 4) return null;
+    if (buf[0] === 255 && buf[1] === 216 && buf[2] === 255) return "image/jpeg";
+    if (buf[0] === 137 && buf[1] === 80 && buf[2] === 78 && buf[3] === 71) return "image/png";
+    if (buf.length >= 12 && buf[0] === 82 && buf[1] === 73 && buf[2] === 70 && buf[3] === 70 && buf[8] === 87 && buf[9] === 69 && buf[10] === 66 && buf[11] === 80) {
+      return "image/webp";
     }
-  );
+    return null;
+  }
+  async function uploadBase64(base64, mimeType) {
+    if (!ALLOWED_MIMES_UPLOAD.has(mimeType)) {
+      return mkErr2(`Nem t\xE1mogatott MIME t\xEDpus: ${mimeType}. Csak image/jpeg, image/png \xE9s image/webp elfogadott.`);
+    }
+    let buffer;
+    try {
+      buffer = Buffer.from(base64, "base64");
+    } catch (e) {
+      return mkErr2(`\xC9rv\xE9nytelen base64 adat: ${String(e)}`);
+    }
+    if (buffer.length > MAX_SIZE_BYTES_UPLOAD) {
+      return mkErr2(`A k\xE9p m\xE9rete (${(buffer.length / 1024).toFixed(0)} KB) meghaladja a 700 KB-os hat\xE1rt.`);
+    }
+    const mime = detectMimeFromBytes(buffer);
+    if (!mime) {
+      return mkErr2("A base64 adat nem felismerhet\u0151 k\xE9pform\xE1tum (JPEG, PNG vagy WebP sz\xFCks\xE9ges).");
+    }
+    if (mime !== mimeType) {
+      return mkErr2(`A k\xE9p val\xF3di form\xE1tuma (${mime}) nem egyezik a megadott mimeType \xE9rt\xE9kkel (${mimeType}).`);
+    }
+    try {
+      const result = await uploadRawBinary("/api/v1/shop/images", buffer, mime, opts);
+      return json2(result);
+    } catch (e) {
+      return mapApiError(e, "upload_image");
+    }
+  }
+  if (flags.remote) {
+    server.registerTool(
+      "haszno_shop_upload_image",
+      {
+        title: "Upload an ad image (remote mode \u2014 base64 only)",
+        description: `Uploads an image for use in a Haszno marketplace ad. Remote MCP mode: only base64-encoded image data is accepted \u2014 filePath is not available because the server cannot access the client's local filesystem. Provide base64-encoded image data together with its MIME type. Returns an object with "id" (numeric image ID) and "url" (path like /api/shop/images/<id>). \u2014 Pass url in the "images" array of haszno_shop_create_ad or haszno_shop_update_ad. \u2014 Pass id in the "imageIds" array of haszno_shop_suggest_from_photos. Supported MIME types: image/jpeg, image/png, image/webp. Maximum size: 700 KB.`,
+        inputSchema: {
+          base64: z12.string().describe(
+            "Base64-encoded image data (without the data: URI prefix)."
+          ),
+          mimeType: z12.string().describe(
+            "MIME type: image/jpeg, image/png, or image/webp."
+          )
+        },
+        annotations: { readOnlyHint: false, destructiveHint: false, idempotentHint: false }
+      },
+      async (args) => {
+        return uploadBase64(args.base64, args.mimeType);
+      }
+    );
+  } else {
+    server.registerTool(
+      "haszno_shop_upload_image",
+      {
+        title: "Upload an ad image",
+        description: 'Uploads an image for use in a Haszno marketplace ad. Provide either an absolute local file path ("filePath") OR a base64-encoded image with its MIME type ("base64" + "mimeType"). Returns an object with "id" (numeric image ID) and "url" (path like /api/shop/images/<id>). \u2014 Pass url in the "images" array of haszno_shop_create_ad or haszno_shop_update_ad. \u2014 Pass id in the "imageIds" array of haszno_shop_suggest_from_photos. Supported MIME types: image/jpeg, image/png, image/webp. Maximum size: 700 KB. The Haszno Shop is free \u2014 no fees for uploading images.',
+        inputSchema: {
+          filePath: z12.string().optional().describe(
+            "Absolute path to a local image file (e.g. /home/user/photo.jpg). Provide this OR base64/mimeType."
+          ),
+          base64: z12.string().optional().describe(
+            "Base64-encoded image data (without the data: URI prefix). Provide together with mimeType."
+          ),
+          mimeType: z12.string().optional().describe(
+            "MIME type for base64 input: image/jpeg, image/png, or image/webp."
+          )
+        },
+        annotations: { readOnlyHint: false, destructiveHint: false, idempotentHint: false }
+      },
+      async (args) => {
+        if (!args.filePath && !args.base64) {
+          return mkErr2("Adj meg vagy filePath-t (abszol\xFAt f\xE1jl\xFAtvonal) vagy base64 + mimeType p\xE1rt.");
+        }
+        if (args.base64 && !args.mimeType) {
+          return mkErr2("base64 megad\xE1sakor mimeType is sz\xFCks\xE9ges (pl. image/jpeg).");
+        }
+        let buffer;
+        let detectedMime;
+        if (args.filePath) {
+          const ext = args.filePath.split(".").pop()?.toLowerCase() ?? "";
+          if (!ALLOWED_EXTS_UPLOAD.has(ext)) {
+            return mkErr2(`Csak JPEG, PNG \xE9s WebP f\xE1jlok t\xF6lthet\u0151k fel (kapott kiterjeszt\xE9s: .${ext || "ismeretlen"}).`);
+          }
+          try {
+            buffer = fs2.readFileSync(args.filePath);
+          } catch (e) {
+            return mkErr2(`Nem siker\xFClt beolvasni a f\xE1jlt: ${String(e)}`);
+          }
+          if (buffer.length > MAX_SIZE_BYTES_UPLOAD) {
+            return mkErr2(`A f\xE1jl m\xE9rete (${(buffer.length / 1024).toFixed(0)} KB) meghaladja a 700 KB-os hat\xE1rt.`);
+          }
+          const mime = detectMimeFromBytes(buffer);
+          if (!mime) {
+            return mkErr2("A f\xE1jl nem felismerhet\u0151 k\xE9pform\xE1tum (JPEG, PNG vagy WebP sz\xFCks\xE9ges).");
+          }
+          const extMime = { jpg: "image/jpeg", jpeg: "image/jpeg", png: "image/png", webp: "image/webp" };
+          if (mime !== extMime[ext]) {
+            return mkErr2(`A f\xE1jl tartalma (${mime}) nem egyezik a kiterjeszt\xE9ssel (.${ext}).`);
+          }
+          detectedMime = mime;
+        } else {
+          return uploadBase64(args.base64, args.mimeType);
+        }
+        try {
+          const result = await uploadRawBinary(
+            "/api/v1/shop/images",
+            buffer,
+            detectedMime,
+            opts
+          );
+          return json2(result);
+        } catch (e) {
+          return mapApiError(e, "upload_image");
+        }
+      }
+    );
+  }
   server.registerTool(
     "haszno_shop_suggest_from_photos",
     {

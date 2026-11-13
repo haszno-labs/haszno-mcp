@@ -87,23 +87,25 @@ function mapApiError(e: unknown, context: string): { content: Array<{ type: 'tex
  * (caller sets Content-Type explicitly for the raw binary body).
  */
 function buildBearerHeaders(opts: HttpOptions): Record<string, string> {
-  const key =
-    opts.apiKey ??
-    process.env['HASZNO_API_TOKEN'] ??
-    process.env['HASZNO_API_KEY'] ??
-    process.env['ARFUTAR_API_KEY']
+  const key = opts.noEnvFallback
+    ? opts.apiKey
+    : (opts.apiKey ??
+       process.env['HASZNO_API_TOKEN'] ??
+       process.env['HASZNO_API_KEY'] ??
+       process.env['ARFUTAR_API_KEY'])
 
   const headers: Record<string, string> = {
     Accept: 'application/json',
-    'User-Agent': 'haszno-mcp/0.3.0',
+    'User-Agent': 'haszno-mcp/0.4.0',
   }
 
   if (key) {
     if (key.startsWith(SHOP_TOKEN_PREFIX)) headers['Authorization'] = `Bearer ${key}`
     else headers['x-api-key'] = key
   } else {
-    const basic =
-      opts.basicAuth ?? process.env['HASZNO_BASIC'] ?? process.env['ARFUTAR_BASIC']
+    const basic = opts.noEnvFallback
+      ? opts.basicAuth
+      : (opts.basicAuth ?? process.env['HASZNO_BASIC'] ?? process.env['ARFUTAR_BASIC'])
     if (basic) {
       headers['Authorization'] = `Basic ${Buffer.from(basic).toString('base64')}`
     }
@@ -123,8 +125,7 @@ async function uploadRawBinary<T>(
 ): Promise<T> {
   const baseUrl = (
     opts.baseUrl ??
-    process.env['HASZNO_API_URL'] ??
-    process.env['ARFUTAR_API_URL'] ??
+    (opts.noEnvFallback ? undefined : (process.env['HASZNO_API_URL'] ?? process.env['ARFUTAR_API_URL'])) ??
     'https://haszno.com'
   ).replace(/\/$/, '')
 
@@ -216,7 +217,16 @@ async function validateCategoryAttributes(
 
 // ── Tool registration ─────────────────────────────────────────────────────────
 
-export function registerShopTools(server: McpServer, opts: HttpOptions): void {
+export function registerShopTools(
+  server: McpServer,
+  opts: HttpOptions,
+  flags: { remote?: boolean } = {},
+): void {
+  // In remote mode: disable env-var fallbacks so credentials come only from opts,
+  // and suppress any tool feature that touches the local filesystem.
+  if (flags.remote) {
+    opts = { ...opts, noEnvFallback: true }
+  }
 
   // ─── haszno_shop_list_categories ──────────────────────────────────────────
 
@@ -470,132 +480,168 @@ export function registerShopTools(server: McpServer, opts: HttpOptions): void {
 
   // ─── haszno_shop_upload_image ──────────────────────────────────────────────
 
-  server.registerTool(
-    'haszno_shop_upload_image',
-    {
-      title: 'Upload an ad image',
-      description:
-        'Uploads an image for use in a Haszno marketplace ad. ' +
-        'Provide either an absolute local file path ("filePath") OR a base64-encoded image with its MIME type ("base64" + "mimeType"). ' +
-        'Returns an object with "id" (numeric image ID) and "url" (path like /api/shop/images/<id>). ' +
-        '— Pass url in the "images" array of haszno_shop_create_ad or haszno_shop_update_ad. ' +
-        '— Pass id in the "imageIds" array of haszno_shop_suggest_from_photos. ' +
-        'Supported MIME types: image/jpeg, image/png, image/webp. Maximum size: 700 KB. ' +
-        'The Haszno Shop is free — no fees for uploading images.',
-      inputSchema: {
-        filePath: z.string().optional().describe(
-          'Absolute path to a local image file (e.g. /home/user/photo.jpg). Provide this OR base64/mimeType.',
-        ),
-        base64: z.string().optional().describe(
-          'Base64-encoded image data (without the data: URI prefix). Provide together with mimeType.',
-        ),
-        mimeType: z.string().optional().describe(
-          'MIME type for base64 input: image/jpeg, image/png, or image/webp.',
-        ),
+  // Shared constants and helpers used by both local and remote registrations.
+  const ALLOWED_EXTS_UPLOAD = new Set(['jpg', 'jpeg', 'png', 'webp'])
+  const ALLOWED_MIMES_UPLOAD = new Set(['image/jpeg', 'image/png', 'image/webp'])
+  const MAX_SIZE_BYTES_UPLOAD = 700 * 1024 // 700 KB — matches the server limit
+
+  function detectMimeFromBytes(buf: Buffer): string | null {
+    if (buf.length < 4) return null
+    if (buf[0] === 0xff && buf[1] === 0xd8 && buf[2] === 0xff) return 'image/jpeg'
+    if (buf[0] === 0x89 && buf[1] === 0x50 && buf[2] === 0x4e && buf[3] === 0x47) return 'image/png'
+    // WebP: bytes 0-3 = 'RIFF', bytes 8-11 = 'WEBP'
+    if (
+      buf.length >= 12 &&
+      buf[0] === 0x52 && buf[1] === 0x49 && buf[2] === 0x46 && buf[3] === 0x46 &&
+      buf[8] === 0x57 && buf[9] === 0x45 && buf[10] === 0x42 && buf[11] === 0x50
+    ) {
+      return 'image/webp'
+    }
+    return null
+  }
+
+  async function uploadBase64(base64: string, mimeType: string): Promise<ReturnType<typeof json | typeof mkErr>> {
+    if (!ALLOWED_MIMES_UPLOAD.has(mimeType)) {
+      return mkErr(`Nem támogatott MIME típus: ${mimeType}. Csak image/jpeg, image/png és image/webp elfogadott.`)
+    }
+    let buffer: Buffer
+    try {
+      buffer = Buffer.from(base64, 'base64')
+    } catch (e) {
+      return mkErr(`Érvénytelen base64 adat: ${String(e)}`)
+    }
+    if (buffer.length > MAX_SIZE_BYTES_UPLOAD) {
+      return mkErr(`A kép mérete (${(buffer.length / 1024).toFixed(0)} KB) meghaladja a 700 KB-os határt.`)
+    }
+    const mime = detectMimeFromBytes(buffer)
+    if (!mime) {
+      return mkErr('A base64 adat nem felismerhető képformátum (JPEG, PNG vagy WebP szükséges).')
+    }
+    if (mime !== mimeType) {
+      return mkErr(`A kép valódi formátuma (${mime}) nem egyezik a megadott mimeType értékkel (${mimeType}).`)
+    }
+    try {
+      const result = await uploadRawBinary<{ id: number; url: string }>('/api/v1/shop/images', buffer, mime, opts)
+      return json(result)
+    } catch (e) {
+      return mapApiError(e, 'upload_image')
+    }
+  }
+
+  if (flags.remote) {
+    // Remote/hosted mode: filePath is completely absent from the tool schema.
+    // The server cannot read files from the CLIENT's local filesystem — only
+    // base64-encoded image data sent in the tool call is accepted.
+    // This prevents the hosted MCP endpoint from ever reading the SERVER's filesystem.
+    server.registerTool(
+      'haszno_shop_upload_image',
+      {
+        title: 'Upload an ad image (remote mode — base64 only)',
+        description:
+          'Uploads an image for use in a Haszno marketplace ad. ' +
+          'Remote MCP mode: only base64-encoded image data is accepted — ' +
+          'filePath is not available because the server cannot access the client\'s local filesystem. ' +
+          'Provide base64-encoded image data together with its MIME type. ' +
+          'Returns an object with "id" (numeric image ID) and "url" (path like /api/shop/images/<id>). ' +
+          '— Pass url in the "images" array of haszno_shop_create_ad or haszno_shop_update_ad. ' +
+          '— Pass id in the "imageIds" array of haszno_shop_suggest_from_photos. ' +
+          'Supported MIME types: image/jpeg, image/png, image/webp. Maximum size: 700 KB.',
+        inputSchema: {
+          base64: z.string().describe(
+            'Base64-encoded image data (without the data: URI prefix).',
+          ),
+          mimeType: z.string().describe(
+            'MIME type: image/jpeg, image/png, or image/webp.',
+          ),
+        },
+        annotations: { readOnlyHint: false, destructiveHint: false, idempotentHint: false },
       },
-      annotations: { readOnlyHint: false, destructiveHint: false, idempotentHint: false },
-    },
-    async (args) => {
-      if (!args.filePath && !args.base64) {
-        return mkErr('Adj meg vagy filePath-t (abszolút fájlútvonal) vagy base64 + mimeType párt.')
-      }
-      if (args.base64 && !args.mimeType) {
-        return mkErr('base64 megadásakor mimeType is szükséges (pl. image/jpeg).')
-      }
-
-      // ── Security constants ────────────────────────────────────────────────
-      const ALLOWED_EXTS = new Set(['jpg', 'jpeg', 'png', 'webp'])
-      const ALLOWED_MIMES = new Set(['image/jpeg', 'image/png', 'image/webp'])
-      const MAX_SIZE_BYTES = 700 * 1024 // 700 KB — matches the server limit
-
-      // Magic-byte signatures for JPEG, PNG, and WebP.
-      function detectMimeFromBytes(buf: Buffer): string | null {
-        if (buf.length < 4) return null
-        if (buf[0] === 0xff && buf[1] === 0xd8 && buf[2] === 0xff) return 'image/jpeg'
-        if (buf[0] === 0x89 && buf[1] === 0x50 && buf[2] === 0x4e && buf[3] === 0x47) return 'image/png'
-        // WebP: bytes 0-3 = 'RIFF', bytes 8-11 = 'WEBP'
-        if (buf.length >= 12 &&
-            buf[0] === 0x52 && buf[1] === 0x49 && buf[2] === 0x46 && buf[3] === 0x46 &&
-            buf[8] === 0x57 && buf[9] === 0x45 && buf[10] === 0x42 && buf[11] === 0x50) {
-          return 'image/webp'
+      async (args) => {
+        return uploadBase64(args.base64 as string, args.mimeType as string)
+      },
+    )
+  } else {
+    // Local/stdio mode: original behaviour — filePath OR base64+mimeType.
+    server.registerTool(
+      'haszno_shop_upload_image',
+      {
+        title: 'Upload an ad image',
+        description:
+          'Uploads an image for use in a Haszno marketplace ad. ' +
+          'Provide either an absolute local file path ("filePath") OR a base64-encoded image with its MIME type ("base64" + "mimeType"). ' +
+          'Returns an object with "id" (numeric image ID) and "url" (path like /api/shop/images/<id>). ' +
+          '— Pass url in the "images" array of haszno_shop_create_ad or haszno_shop_update_ad. ' +
+          '— Pass id in the "imageIds" array of haszno_shop_suggest_from_photos. ' +
+          'Supported MIME types: image/jpeg, image/png, image/webp. Maximum size: 700 KB. ' +
+          'The Haszno Shop is free — no fees for uploading images.',
+        inputSchema: {
+          filePath: z.string().optional().describe(
+            'Absolute path to a local image file (e.g. /home/user/photo.jpg). Provide this OR base64/mimeType.',
+          ),
+          base64: z.string().optional().describe(
+            'Base64-encoded image data (without the data: URI prefix). Provide together with mimeType.',
+          ),
+          mimeType: z.string().optional().describe(
+            'MIME type for base64 input: image/jpeg, image/png, or image/webp.',
+          ),
+        },
+        annotations: { readOnlyHint: false, destructiveHint: false, idempotentHint: false },
+      },
+      async (args) => {
+        if (!args.filePath && !args.base64) {
+          return mkErr('Adj meg vagy filePath-t (abszolút fájlútvonal) vagy base64 + mimeType párt.')
         }
-        return null
-      }
+        if (args.base64 && !args.mimeType) {
+          return mkErr('base64 megadásakor mimeType is szükséges (pl. image/jpeg).')
+        }
 
-      let buffer: Buffer
-      let detectedMime: string
+        let buffer: Buffer
+        let detectedMime: string
 
-      if (args.filePath) {
-        // Extension whitelist — reject anything not in the allowed set early.
-        const ext = args.filePath.split('.').pop()?.toLowerCase() ?? ''
-        if (!ALLOWED_EXTS.has(ext)) {
-          return mkErr(`Csak JPEG, PNG és WebP fájlok tölthetők fel (kapott kiterjesztés: .${ext || 'ismeretlen'}).`)
+        if (args.filePath) {
+          // Extension whitelist — reject anything not in the allowed set early.
+          const ext = (args.filePath as string).split('.').pop()?.toLowerCase() ?? ''
+          if (!ALLOWED_EXTS_UPLOAD.has(ext)) {
+            return mkErr(`Csak JPEG, PNG és WebP fájlok tölthetők fel (kapott kiterjesztés: .${ext || 'ismeretlen'}).`)
+          }
+
+          try {
+            buffer = fs.readFileSync(args.filePath as string)
+          } catch (e) {
+            return mkErr(`Nem sikerült beolvasni a fájlt: ${String(e)}`)
+          }
+
+          if (buffer.length > MAX_SIZE_BYTES_UPLOAD) {
+            return mkErr(`A fájl mérete (${(buffer.length / 1024).toFixed(0)} KB) meghaladja a 700 KB-os határt.`)
+          }
+
+          const mime = detectMimeFromBytes(buffer)
+          if (!mime) {
+            return mkErr('A fájl nem felismerhető képformátum (JPEG, PNG vagy WebP szükséges).')
+          }
+          const extMime: Record<string, string> = { jpg: 'image/jpeg', jpeg: 'image/jpeg', png: 'image/png', webp: 'image/webp' }
+          if (mime !== extMime[ext]) {
+            return mkErr(`A fájl tartalma (${mime}) nem egyezik a kiterjesztéssel (.${ext}).`)
+          }
+          detectedMime = mime
+        } else {
+          return uploadBase64(args.base64 as string, args.mimeType as string)
         }
 
         try {
-          buffer = fs.readFileSync(args.filePath)
+          const result = await uploadRawBinary<{ id: number; url: string }>(
+            '/api/v1/shop/images',
+            buffer,
+            detectedMime,
+            opts,
+          )
+          return json(result)
         } catch (e) {
-          return mkErr(`Nem sikerült beolvasni a fájlt: ${String(e)}`)
+          return mapApiError(e, 'upload_image')
         }
-
-        // Size cap.
-        if (buffer.length > MAX_SIZE_BYTES) {
-          return mkErr(`A fájl mérete (${(buffer.length / 1024).toFixed(0)} KB) meghaladja a 700 KB-os határt.`)
-        }
-
-        // Magic-byte check — must match the declared extension.
-        const mime = detectMimeFromBytes(buffer)
-        if (!mime) {
-          return mkErr('A fájl nem felismerhető képformátum (JPEG, PNG vagy WebP szükséges).')
-        }
-        const extMime: Record<string, string> = { jpg: 'image/jpeg', jpeg: 'image/jpeg', png: 'image/png', webp: 'image/webp' }
-        if (mime !== extMime[ext]) {
-          return mkErr(`A fájl tartalma (${mime}) nem egyezik a kiterjesztéssel (.${ext}).`)
-        }
-        detectedMime = mime
-      } else {
-        // base64 path (checked above: args.base64 is set, args.mimeType is set)
-        const declaredMime = args.mimeType as string
-        if (!ALLOWED_MIMES.has(declaredMime)) {
-          return mkErr(`Nem támogatott MIME típus: ${declaredMime}. Csak image/jpeg, image/png és image/webp elfogadott.`)
-        }
-
-        try {
-          buffer = Buffer.from(args.base64 as string, 'base64')
-        } catch (e) {
-          return mkErr(`Érvénytelen base64 adat: ${String(e)}`)
-        }
-
-        // Size cap.
-        if (buffer.length > MAX_SIZE_BYTES) {
-          return mkErr(`A kép mérete (${(buffer.length / 1024).toFixed(0)} KB) meghaladja a 700 KB-os határt.`)
-        }
-
-        // Magic-byte check — must match declared MIME type.
-        const mime = detectMimeFromBytes(buffer)
-        if (!mime) {
-          return mkErr('A base64 adat nem felismerhető képformátum (JPEG, PNG vagy WebP szükséges).')
-        }
-        if (mime !== declaredMime) {
-          return mkErr(`A kép valódi formátuma (${mime}) nem egyezik a megadott mimeType értékkel (${declaredMime}).`)
-        }
-        detectedMime = mime
-      }
-
-      try {
-        // POST /api/shop/images — raw binary body, Content-Type = image/jpeg|png|webp
-        const result = await uploadRawBinary<{ id: number; url: string }>(
-          '/api/v1/shop/images',
-          buffer,
-          detectedMime,
-          opts,
-        )
-        return json(result)
-      } catch (e) {
-        return mapApiError(e, 'upload_image')
-      }
-    },
-  )
+      },
+    )
+  }
 
   // ─── haszno_shop_suggest_from_photos ──────────────────────────────────────
 
