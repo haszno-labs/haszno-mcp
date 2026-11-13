@@ -1,7 +1,7 @@
 {
   "name": "@haszno/mcp",
-  "version": "0.3.0",
-  "description": "MCP server for the Haszno API (stdio transport)",
+  "version": "0.4.0",
+  "description": "MCP server for the Haszno API (stdio transport) — also importable as a library via @haszno/mcp/lib",
   "license": "MIT",
   "private": true,
   "type": "module",
@@ -15,6 +15,12 @@
       "import": {
         "types": "./dist/index.d.ts",
         "default": "./dist/index.js"
+      }
+    },
+    "./lib": {
+      "import": {
+        "types": "./dist/lib.d.ts",
+        "default": "./dist/lib.js"
       }
     }
   },

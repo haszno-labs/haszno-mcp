@@ -215,11 +215,42 @@ A foglalás nem fizetés: a vételár és az átadás közvetlenül a vevő és 
 
 ---
 
+## Library belépő (`@haszno/mcp/lib`)
+
+A csomag tartalmaz egy mellékhatás-mentes library belépőt **hosztolt (HTTP/remote) MCP végpontokhoz**.
+Importáláskor nem indít el szervert, nem olvas env változókat, és nem érinti a fájlrendszert.
+
+```ts
+import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js'
+import { registerShopTools, type HttpOptions } from '@haszno/mcp/lib'
+
+const server = new McpServer({ name: 'my-server', version: '1.0.0' })
+
+registerShopTools(
+  server,
+  {
+    apiKey:  req.headers['x-haszno-token'], // kérésenként megadott hitelesítési adat
+    baseUrl: process.env.HASZNO_API_BASE,
+    fetch,
+  },
+  { remote: true },  // ← bekapcsolja a remote módot
+)
+```
+
+`remote: true` garantálja:
+
+- **`haszno_shop_upload_image`** — a `filePath` hiányzik a tool sémájából; a handler
+  csak `base64 + mimeType` kombinációt fogad el, és soha nem hívja az `fs.readFileSync`-et.
+- **Nincs env-var fallback** — a `HASZNO_API_TOKEN`, `HASZNO_API_KEY`, `HASZNO_API_URL` stb.
+  figyelmen kívül marad. Minden hitelesítési adat és az alap URL-t az `opts` argumentumban kell megadni.
+
+---
+
 ## Fejlesztés
 
 ```bash
 npm install
-npm run build      # tsup build
+npm run build      # tsup build (dist/index.js + dist/lib.js)
 npm test           # vitest run
 npm run typecheck  # tsc --noEmit
 ```

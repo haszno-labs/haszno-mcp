@@ -216,11 +216,49 @@ Reserving is not paying: payment and handover happen directly between buyer and 
 
 ---
 
+## Library entry (`@haszno/mcp/lib`)
+
+The package ships a side-effect-free library entry for **hosted (HTTP/remote) MCP endpoints**.
+Importing it starts no server, reads no env vars, and touches no files.
+
+```ts
+import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js'
+import { registerShopTools, type HttpOptions } from '@haszno/mcp/lib'
+
+const server = new McpServer({ name: 'my-server', version: '1.0.0' })
+
+registerShopTools(
+  server,
+  {
+    apiKey:  req.headers['x-haszno-token'], // per-request credential
+    baseUrl: process.env.HASZNO_API_BASE,
+    fetch,                                  // supply the runtime's fetch
+  },
+  { remote: true },  // ← enables remote mode
+)
+```
+
+`remote: true` guarantees:
+
+- **`haszno_shop_upload_image`** — `filePath` is absent from the tool schema; the handler
+  only accepts `base64 + mimeType` and never calls `fs.readFileSync`.
+- **No env-var fallbacks** — `HASZNO_API_TOKEN`, `HASZNO_API_KEY`, `HASZNO_API_URL`, etc.
+  are ignored. All credentials and the base URL must come from the `opts` argument.
+
+Peer dependencies (must be installed by the host application):
+
+| Package | Version |
+|---|---|
+| `@modelcontextprotocol/sdk` | `^1.12.0` |
+| `zod` | `^4.0` |
+
+---
+
 ## Development
 
 ```bash
 npm install
-npm run build      # tsup build
+npm run build      # tsup build (emits dist/index.js + dist/lib.js)
 npm test           # vitest run
 npm run typecheck  # tsc --noEmit
 ```

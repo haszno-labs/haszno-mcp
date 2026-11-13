@@ -35,17 +35,25 @@ export interface HttpOptions {
   maxRetries?: number
   /** request timeout ms */
   timeoutMs?: number
+  /**
+   * When true, disables ALL process.env fallbacks for auth credentials and baseUrl.
+   * Required for hosted/remote MCP endpoints where every credential must be supplied
+   * explicitly in opts — never read from the host server's environment.
+   */
+  noEnvFallback?: boolean
 }
 
 function buildAuthHeader(opts: HttpOptions): Record<string, string> {
   // Priority: explicit opts.apiKey > HASZNO_API_TOKEN (new, preferred for shop tokens) >
   //           HASZNO_API_KEY > ARFUTAR_API_KEY (legacy).
+  // When noEnvFallback is true only opts.apiKey is used — env vars are never read.
   // Never print credentials.
-  const key =
-    opts.apiKey ??
-    process.env['HASZNO_API_TOKEN'] ??
-    process.env['HASZNO_API_KEY'] ??
-    process.env['ARFUTAR_API_KEY']
+  const key = opts.noEnvFallback
+    ? opts.apiKey
+    : (opts.apiKey ??
+       process.env['HASZNO_API_TOKEN'] ??
+       process.env['HASZNO_API_KEY'] ??
+       process.env['ARFUTAR_API_KEY'])
 
   if (key) {
     // Shop API token → Bearer; any other key → x-api-key (legacy behaviour unchanged).
@@ -53,7 +61,9 @@ function buildAuthHeader(opts: HttpOptions): Record<string, string> {
     return { 'x-api-key': key }
   }
 
-  const basic = opts.basicAuth ?? process.env['HASZNO_BASIC'] ?? process.env['ARFUTAR_BASIC']
+  const basic = opts.noEnvFallback
+    ? opts.basicAuth
+    : (opts.basicAuth ?? process.env['HASZNO_BASIC'] ?? process.env['ARFUTAR_BASIC'])
   if (basic) {
     const encoded = Buffer.from(basic).toString('base64')
     return { Authorization: `Basic ${encoded}` }
@@ -73,8 +83,7 @@ export async function request<T>(
 ): Promise<T> {
   const baseUrl = (
     opts.baseUrl ??
-    process.env['HASZNO_API_URL'] ??
-    process.env['ARFUTAR_API_URL'] ??
+    (opts.noEnvFallback ? undefined : (process.env['HASZNO_API_URL'] ?? process.env['ARFUTAR_API_URL'])) ??
     'https://haszno.com'
   ).replace(/\/$/, '')
   const url = `${baseUrl}${path}`
@@ -87,7 +96,7 @@ export async function request<T>(
   const headers: Record<string, string> = {
     'Content-Type': 'application/json',
     'Accept': 'application/json',
-    'User-Agent': 'haszno-mcp/0.3.0',
+    'User-Agent': 'haszno-mcp/0.4.0',
     ...buildAuthHeader(opts),
   }
 
