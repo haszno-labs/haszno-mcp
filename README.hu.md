@@ -177,7 +177,10 @@ A foglalás nem fizetés: a vételár és az átadás közvetlenül a vevő és 
 - `haszno_shop_list_my_ads` — saját, nem törölt hirdetések
 - `haszno_shop_list_inquiries` — vevők által küldött kérdések (`adId?`, `limit`, `offset`)
 - `haszno_shop_list_favorites` — mentett kedvenc hirdetések
-- `haszno_shop_list_reservations` — foglalásaim `buyer` (alapértelmezett) vagy `seller` nézőpontból
+- `haszno_shop_list_reservations` — foglalásaim `buyer` (alapértelmezett) vagy `seller` nézőpontból; a válasz tartalmazza: `counterPriceGross` (eladói ellenajánlat), `agreedPriceGross` (megállapodott ár), `sellerRating` (vevő értékelése az eladóról a teljesítés után)
+- `haszno_shop_list_messages` — foglalás üzenetszáláért (`id` = foglalás azonosítója); az elemek tartalmazzák az `author` (`buyer`|`seller`), `body`, `createdAt` mezőket
+- `haszno_shop_list_saved_searches` — mentett kereséseim riasztási beállításokkal; `{ id, name, filters, alertEnabled, lastAlertSentAt, createdAt }[]`
+- `haszno_shop_get_draft` — in-progress hirdetésvázlat lekérése (null-t ad vissza, ha nincs)
 
 **Író eszközök (hitelesítés szükséges; a create/reserve/complete megköveteli a `confirm: true` mezőt)**
 - `haszno_shop_upload_image` — kép feltöltése (`filePath` vagy `base64` + `mimeType`), max 700 KB, visszaad `{ id, url }`
@@ -193,8 +196,22 @@ A foglalás nem fizetés: a vételár és az átadás közvetlenül a vevő és 
 - `haszno_shop_respond_reservation` — foglalás `accept` (elfogadás) vagy `decline` (elutasítás) (eladó)
 - `haszno_shop_cancel_reservation` — saját foglalás lemondása, státusz `visszavonva` (vevő)
 - `haszno_shop_complete_reservation` — foglalás teljesítettnek jelölése → hirdetés `eladva` lesz (eladó, visszafordíthatatlan) *(confirm: true)*
+- `haszno_shop_counter_offer` — eladó ellenárat javasol függőben lévő foglaláson (`id`, `priceGross`); beállítja a `counterPriceGross` mezőt
+- `haszno_shop_accept_counter` — vevő elfogadja az eladói ellenajánlatot (`id`); az `offerPriceGross` frissül a megállapodott árra
+- `haszno_shop_send_message` — üzenet küldése foglalás-szálban (`id`, `body`); visszaad `{ message: { id, author, body, createdAt } }`
+- `haszno_shop_review` — vevő csillag-értékelést ad + opcionális megjegyzés teljesített foglalás után (`id`, `rating` 1–5, `comment?`) *(confirm: true)*
+- `haszno_shop_reply_inquiry` — eladó válaszol vevői érdeklődésre (`id` = érdeklődés azonosítója, `message`); visszaad `{ reply: { id, inquiryId, message, createdAt } }`
+- `haszno_shop_save_search` — keresés mentése opcionális áreséssel kapcsolt értesítővel (`name`, `filters`, `alertEnabled?`)
+- `haszno_shop_delete_saved_search` — mentett keresés törlése `id` alapján
+- `haszno_shop_watch_price` — feliratkozás (`watch: true`) vagy leiratkozás (`watch: false`) ár-értesítőre egy hirdetésen (`adId`)
+- `haszno_shop_import_from_url` — AI-alapú mezőkinyerés (cím, leírás, ár, képek) termékoldal URL-ből; visszaad `{ title?, description?, price?, images[], parsed }`
+- `haszno_shop_save_draft` — in-progress hirdetésvázlat mentése vagy felülírása (`payload`: részleges mezők)
+- `haszno_shop_clear_draft` — hirdetésvázlat végleges törlése
+- `haszno_shop_remove_background` — AI háttér-eltávolítás feltöltött képen (`imageId`); visszaad `{ id, url }` az új képhez
 
 **Foglalás-státuszok:** `fuggoben` (függőben), `elfogadva` (elfogadva), `elutasitva` (elutasítva/automatikusan elutasítva), `visszavonva` (vevő mondta le), `teljesitve` (teljesítve), `lejart` (foglalás lejárt)
+
+**Áralku-folyamat:** vevő leadja a foglalást (`offerPriceGross?`) → eladó ellenajánlatot tesz (`haszno_shop_counter_offer`) → vevő elfogadja (`haszno_shop_accept_counter`) → `agreedPriceGross` beállítódik → eladó teljesíti → vevő értékel
 
 ---
 

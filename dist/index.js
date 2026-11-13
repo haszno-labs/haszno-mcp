@@ -48,7 +48,7 @@ async function request(method, path3, body, opts) {
   const headers = {
     "Content-Type": "application/json",
     "Accept": "application/json",
-    "User-Agent": "haszno-mcp/0.1.0",
+    "User-Agent": "haszno-mcp/0.3.0",
     ...buildAuthHeader(opts)
   };
   let lastError;
@@ -2184,7 +2184,7 @@ function buildBearerHeaders(opts) {
   const key = opts.apiKey ?? process.env["HASZNO_API_TOKEN"] ?? process.env["HASZNO_API_KEY"] ?? process.env["ARFUTAR_API_KEY"];
   const headers = {
     Accept: "application/json",
-    "User-Agent": "haszno-mcp/0.2.0"
+    "User-Agent": "haszno-mcp/0.3.0"
   };
   if (key) {
     if (key.startsWith(SHOP_TOKEN_PREFIX)) headers["Authorization"] = `Bearer ${key}`;
@@ -2398,7 +2398,7 @@ function registerShopTools(server, opts) {
     "haszno_shop_list_reservations",
     {
       title: "List my reservations",
-      description: `Returns reservations for the authenticated user. Use role="buyer" (default) to list reservations YOU placed on other people's ads. Use role="seller" to list reservations buyers placed on YOUR ads. Status values: "fuggoben" (pending), "elfogadva" (accepted), "elutasitva" (declined/auto-declined), "visszavonva" (cancelled by buyer), "teljesitve" (completed), "lejart" (hold expired). Contact fields (phone, email) are only filled in when status is "elfogadva" or "teljesitve". Reserving is not paying \u2014 payment and handover happen directly between buyer and seller.`,
+      description: `Returns reservations for the authenticated user. Use role="buyer" (default) to list reservations YOU placed on other people's ads. Use role="seller" to list reservations buyers placed on YOUR ads. Status values: "fuggoben" (pending), "elfogadva" (accepted), "elutasitva" (declined/auto-declined), "visszavonva" (cancelled by buyer), "teljesitve" (completed), "lejart" (hold expired). Contact fields (phone, email) are only filled in when status is "elfogadva" or "teljesitve". Price negotiation fields: offerPriceGross (buyer's last offer), counterPriceGross (seller's active counter-offer, null when none), agreedPriceGross (the mutually agreed price set at acceptance). After a reservation is "teljesitve", both parties can leave a review with haszno_shop_review. Reserving is not paying \u2014 payment and handover happen directly between buyer and seller.`,
       inputSchema: {
         role: z12.enum(["buyer", "seller"]).optional().describe('Whose perspective: "buyer" (default) or "seller"'),
         status: z12.string().optional().describe("Filter by reservation status"),
@@ -2826,7 +2826,7 @@ function registerShopTools(server, opts) {
     "haszno_shop_respond_reservation",
     {
       title: "Accept or decline a reservation (seller)",
-      description: `Accepts or declines a pending reservation on one of your ads (seller action). action="accept": marks the reservation as "elfogadva" (accepted); the buyer's contact details become visible to you in the reservation. action="decline": marks the reservation as "elutasitva" (declined); the ad remains active for other buyers. The Haszno Shop is free \u2014 accepting a reservation does NOT create a payment.`,
+      description: `Accepts or declines a pending reservation on one of your ads (seller action). action="accept": marks the reservation as "elfogadva" (accepted); the buyer's contact details become visible to you in the reservation. action="decline": marks the reservation as "elutasitva" (declined); the ad remains active for other buyers. Response includes counterPriceGross (seller's last counter-offer if any) and agreedPriceGross (agreed price). You can also send a counter-offer first with haszno_shop_counter_offer before accepting. The Haszno Shop is free \u2014 accepting a reservation does NOT create a payment.`,
       inputSchema: {
         id: z12.number().int().min(1).describe("Reservation ID"),
         action: z12.enum(["accept", "decline"]).describe('"accept" or "decline"')
@@ -2866,7 +2866,7 @@ function registerShopTools(server, opts) {
     "haszno_shop_complete_reservation",
     {
       title: "Complete a reservation (seller)",
-      description: 'Marks a reservation as completed ("teljesitve"), confirming that the item has changed hands. This is a REAL, IRREVERSIBLE action \u2014 only call it when the user confirms the sale is done. Side effects: (1) the ad status changes to "eladva" (sold) and disappears from search; (2) all other open reservations for the same ad are automatically declined. Optionally record the actual sold price (soldPriceGross) for your records \u2014 it is not shared publicly. REMINDER: Payment and handover happen directly between buyer and seller \u2014 Haszno does not process payments. The Haszno Shop is free \u2014 no commission on completed deals.',
+      description: 'Marks a reservation as completed ("teljesitve"), confirming that the item has changed hands. This is a REAL, IRREVERSIBLE action \u2014 only call it when the user confirms the sale is done. Side effects: (1) the ad status changes to "eladva" (sold) and disappears from search; (2) all other open reservations for the same ad are automatically declined. Optionally record the actual sold price (soldPriceGross) for your records \u2014 it is not shared publicly. The response includes agreedPriceGross (the mutually agreed price if the buyer accepted a counter-offer). After completion, both buyer and seller can leave a rating with haszno_shop_review (sellerRating is the aggregate of these). REMINDER: Payment and handover happen directly between buyer and seller \u2014 Haszno does not process payments. The Haszno Shop is free \u2014 no commission on completed deals.',
       inputSchema: {
         id: z12.number().int().min(1).describe("Reservation ID"),
         soldPriceGross: z12.number().int().min(1).optional().nullable().describe(
@@ -2886,6 +2886,314 @@ function registerShopTools(server, opts) {
         return json2(result);
       } catch (e) {
         return mapApiError(e, "complete_reservation");
+      }
+    }
+  );
+  server.registerTool(
+    "haszno_shop_counter_offer",
+    {
+      title: "Send a counter-offer on a reservation (seller)",
+      description: 'Seller sends a counter-offer price on a pending ("fuggoben") reservation. The buyer will be notified by e-mail and can accept it with haszno_shop_accept_counter, or ignore it and proceed normally. Can only be called on a "fuggoben" reservation that belongs to your ads. Returns the updated reservation with counterPriceGross set. The Haszno Shop is free \u2014 counter-offers carry no fee.',
+      inputSchema: {
+        id: z12.number().int().min(1).describe("Reservation ID"),
+        priceGross: z12.number().int().min(1).describe("Counter-offer price in HUF gross (must be a positive integer)")
+      },
+      annotations: { readOnlyHint: false, destructiveHint: false, idempotentHint: false }
+    },
+    async (args) => {
+      try {
+        const result = await post(`/api/v1/shop/my/reservations/${args.id}/counter`, { priceGross: args.priceGross }, opts);
+        return json2(result);
+      } catch (e) {
+        return mapApiError(e, "counter_offer");
+      }
+    }
+  );
+  server.registerTool(
+    "haszno_shop_accept_counter",
+    {
+      title: "Accept the seller's counter-offer (buyer)",
+      description: `Buyer accepts the seller's active counter-offer on a pending ("fuggoben") reservation. After acceptance: offerPriceGross is updated to the accepted counter price, counterPriceGross is cleared. The reservation remains "fuggoben" \u2014 the seller still needs to formally accept it. Returns error 409 when there is no active counter-offer on this reservation. The Haszno Shop is free \u2014 acceptance does NOT create a payment.`,
+      inputSchema: {
+        id: z12.number().int().min(1).describe("Reservation ID")
+      },
+      annotations: { readOnlyHint: false, destructiveHint: false, idempotentHint: false }
+    },
+    async (args) => {
+      try {
+        const result = await post(`/api/v1/shop/my/reservations/${args.id}/accept-counter`, {}, opts);
+        return json2(result);
+      } catch (e) {
+        return mapApiError(e, "accept_counter");
+      }
+    }
+  );
+  server.registerTool(
+    "haszno_shop_list_messages",
+    {
+      title: "List messages on a reservation",
+      description: 'Returns the message thread for a reservation. Only the buyer and the seller of that reservation may read the messages. Each message has: id, author ("buyer" or "seller"), body (free text, may contain contact details), createdAt. Messages are ordered oldest first (up to 500). Requires authentication.',
+      inputSchema: {
+        id: z12.number().int().min(1).describe("Reservation ID")
+      },
+      annotations: { readOnlyHint: true, destructiveHint: false }
+    },
+    async (args) => {
+      try {
+        const result = await get(`/api/v1/shop/my/reservations/${args.id}/messages`, opts);
+        return json2(result);
+      } catch (e) {
+        return mapApiError(e, "list_messages");
+      }
+    }
+  );
+  server.registerTool(
+    "haszno_shop_send_message",
+    {
+      title: "Send a message on a reservation",
+      description: "Sends a free-text message on a reservation thread. Both the buyer and the seller of that reservation may send messages. The other party will be notified by e-mail (message excerpt only). The body may contain contact details (Haszno does not filter message content). Rate-limited to 20 messages per hour. Requires authentication.",
+      inputSchema: {
+        id: z12.number().int().min(1).describe("Reservation ID"),
+        body: z12.string().min(1).max(2e3).describe("Message text (1\u20132000 characters)")
+      },
+      annotations: { readOnlyHint: false, destructiveHint: false, idempotentHint: false }
+    },
+    async (args) => {
+      try {
+        const result = await post(`/api/v1/shop/my/reservations/${args.id}/messages`, { body: args.body }, opts);
+        return json2(result);
+      } catch (e) {
+        return mapApiError(e, "send_message");
+      }
+    }
+  );
+  server.registerTool(
+    "haszno_shop_review",
+    {
+      title: "Leave a review on a completed reservation",
+      description: `Leaves a review (rating 1\u20135 + optional comment) on a completed ("teljesitve") reservation. Both the buyer and the seller can each leave exactly one review per reservation. Returns error 409 when the reservation is not "teljesitve" or when already reviewed. The aggregate of a seller's received reviews forms their sellerRating. This is a REAL action \u2014 only call when the user confirms they want to submit the review. The Haszno Shop is free \u2014 reviews are voluntary.`,
+      inputSchema: {
+        id: z12.number().int().min(1).describe('Reservation ID (must be "teljesitve" / completed)'),
+        rating: z12.number().int().min(1).max(5).describe("Rating from 1 (worst) to 5 (best)"),
+        comment: z12.string().max(1e3).optional().describe("Optional review comment (max 1000 characters)"),
+        confirm: z12.literal(true).describe(
+          "Must be exactly true. This submits a real, permanent review."
+        )
+      },
+      annotations: { readOnlyHint: false, destructiveHint: false, idempotentHint: false }
+    },
+    async (args) => {
+      const body = { rating: args.rating };
+      if (args.comment) body["comment"] = args.comment;
+      try {
+        const result = await post(`/api/v1/shop/my/reservations/${args.id}/review`, body, opts);
+        return json2(result);
+      } catch (e) {
+        return mapApiError(e, "review");
+      }
+    }
+  );
+  server.registerTool(
+    "haszno_shop_reply_inquiry",
+    {
+      title: "Reply to an inquiry (seller)",
+      description: "Seller replies to an inquiry (question) a potential buyer sent on one of their ads. The inquirer is notified by e-mail with the reply. Only the seller who owns the ad may reply. Each inquiry can have at most ONE reply. Returns error 409 when the inquiry already has a reply. The Haszno Shop is free.",
+      inputSchema: {
+        id: z12.number().int().min(1).describe("Inquiry ID (from haszno_shop_list_inquiries)"),
+        message: z12.string().min(1).max(2e3).describe("Reply message (1\u20132000 characters)")
+      },
+      annotations: { readOnlyHint: false, destructiveHint: false, idempotentHint: false }
+    },
+    async (args) => {
+      try {
+        const result = await post(`/api/v1/shop/my/inquiries/${args.id}/reply`, { message: args.message }, opts);
+        return json2(result);
+      } catch (e) {
+        return mapApiError(e, "reply_inquiry");
+      }
+    }
+  );
+  server.registerTool(
+    "haszno_shop_list_saved_searches",
+    {
+      title: "List my saved searches",
+      description: "Returns all saved searches for the authenticated user, newest first. Each entry has: id, name, filters (q, cat, sub, min, max, county, cond, attrs), alertEnabled (whether e-mail alerts are on), lastAlertSentAt, createdAt. Create a new one with haszno_shop_save_search; delete with haszno_shop_delete_saved_search. Requires authentication.",
+      annotations: { readOnlyHint: true, destructiveHint: false }
+    },
+    async () => {
+      try {
+        const result = await get("/api/v1/shop/my/saved-searches", opts);
+        return json2(result);
+      } catch (e) {
+        return mapApiError(e, "list_saved_searches");
+      }
+    }
+  );
+  server.registerTool(
+    "haszno_shop_save_search",
+    {
+      title: "Save a search with optional e-mail alerts",
+      description: "Saves a search filter set so the user can be notified by e-mail when matching new ads appear. Maximum 20 saved searches per user; returns error 422 when the cap is reached. alertEnabled defaults to true \u2014 set to false to save without notifications. The filters object accepts the same fields as haszno_shop_search_ads. Returns the created SavedSearch with its id. Requires authentication. The Haszno Shop is free.",
+      inputSchema: {
+        name: z12.string().min(1).max(80).describe("Human-readable name for this saved search (max 80 chars)"),
+        filters: z12.object({
+          q: z12.string().optional().describe("Full-text search query"),
+          cat: z12.string().optional().describe("Category key"),
+          sub: z12.string().optional().describe("Subcategory key"),
+          min: z12.number().int().min(0).optional().describe("Minimum price in HUF gross"),
+          max: z12.number().int().min(0).optional().describe("Maximum price in HUF gross"),
+          county: z12.string().optional().describe("County name"),
+          cond: z12.enum(["uj", "ujszeru", "hasznalt", "serult"]).optional().describe("Product condition")
+        }).describe("Search filter criteria (same fields as haszno_shop_search_ads)"),
+        alertEnabled: z12.boolean().optional().describe("Send e-mail alerts when new matching ads appear (default true)")
+      },
+      annotations: { readOnlyHint: false, destructiveHint: false, idempotentHint: false }
+    },
+    async (args) => {
+      try {
+        const result = await post("/api/v1/shop/my/saved-searches", {
+          name: args.name,
+          filters: args.filters,
+          alertEnabled: args.alertEnabled
+        }, opts);
+        return json2(result);
+      } catch (e) {
+        return mapApiError(e, "save_search");
+      }
+    }
+  );
+  server.registerTool(
+    "haszno_shop_delete_saved_search",
+    {
+      title: "Delete a saved search",
+      description: "Deletes a saved search by its id. If the id does not exist or does not belong to the authenticated user, the deletion is a no-op (idempotent). Returns { ok: true } on success. Requires authentication.",
+      inputSchema: {
+        id: z12.number().int().min(1).describe("Saved search ID (from haszno_shop_list_saved_searches)")
+      },
+      annotations: { readOnlyHint: false, destructiveHint: true, idempotentHint: true }
+    },
+    async (args) => {
+      try {
+        const result = await del(`/api/v1/shop/my/saved-searches/${args.id}`, opts);
+        return json2(result);
+      } catch (e) {
+        return mapApiError(e, "delete_saved_search");
+      }
+    }
+  );
+  server.registerTool(
+    "haszno_shop_watch_price",
+    {
+      title: "Subscribe to / unsubscribe from price-drop alerts for an ad",
+      description: `Subscribes to (watch=true) or unsubscribes from (watch=false) price-drop e-mail alerts for a specific ad. When subscribed, the user gets an e-mail when the ad's price drops. watch=true: PUT /api/v1/shop/ads/:adId/watch \u2014 the ad must be "aktiv"; returns { watched: true }. watch=false: DELETE /api/v1/shop/ads/:adId/watch \u2014 idempotent; returns { watched: false }. Returns error 400 if the ad is not active (watch=true only). Requires authentication. The Haszno Shop is free.`,
+      inputSchema: {
+        adId: z12.number().int().min(1).describe("Ad ID to watch or unwatch"),
+        watch: z12.boolean().describe("true to subscribe to price-drop alerts, false to unsubscribe")
+      },
+      annotations: { readOnlyHint: false, destructiveHint: false, idempotentHint: true }
+    },
+    async (args) => {
+      try {
+        let result;
+        if (args.watch) {
+          result = await put(`/api/v1/shop/ads/${args.adId}/watch`, {}, opts);
+        } else {
+          result = await del(`/api/v1/shop/ads/${args.adId}/watch`, opts);
+        }
+        return json2(result);
+      } catch (e) {
+        return mapApiError(e, "watch_price");
+      }
+    }
+  );
+  server.registerTool(
+    "haszno_shop_import_from_url",
+    {
+      title: "Extract ad data from an external URL (draft only \u2014 never posts)",
+      description: "Fetches a product or classifieds listing page by URL and extracts its metadata (title, description, price, images) for use as a pre-filled ad draft. This tool NEVER creates or posts an ad \u2014 it only returns extracted data. You must still call haszno_shop_create_ad (with confirm:true) separately after reviewing the result. Facebook URLs are rejected with a helpful error (login wall). Returns: title?, description?, price?, images (array of strings), parsed (extracted car/item attributes). Rate-limited to 10 imports per hour. Requires authentication.",
+      inputSchema: {
+        url: z12.string().url().max(2048).describe("Public URL of the product or classifieds listing page to import from")
+      },
+      annotations: { readOnlyHint: false, destructiveHint: false, idempotentHint: false }
+    },
+    async (args) => {
+      try {
+        const result = await post("/api/v1/shop/assist/url-import", { url: args.url }, opts);
+        return json2(result);
+      } catch (e) {
+        return mapApiError(e, "import_from_url");
+      }
+    }
+  );
+  server.registerTool(
+    "haszno_shop_get_draft",
+    {
+      title: "Get the current ad creation draft",
+      description: "Returns the authenticated user's current server-side ad creation draft, or null if none exists. The draft is a partial ad payload saved across sessions. Returns { payload: {...}, updatedAt: string } or null. Save or update with haszno_shop_save_draft; discard with haszno_shop_clear_draft. Requires authentication.",
+      annotations: { readOnlyHint: true, destructiveHint: false }
+    },
+    async () => {
+      try {
+        const result = await get("/api/v1/shop/my/draft", opts);
+        return json2(result);
+      } catch (e) {
+        return mapApiError(e, "get_draft");
+      }
+    }
+  );
+  server.registerTool(
+    "haszno_shop_save_draft",
+    {
+      title: "Save or update the ad creation draft",
+      description: "Saves or replaces the authenticated user's server-side ad creation draft (upsert). Pass any subset of ad fields (same structure as haszno_shop_create_ad, without confirm). The draft is kept until the user explicitly clears it (haszno_shop_clear_draft) or posts the ad (haszno_shop_create_ad clears the draft automatically). Maximum draft size is 64 KB. Image URLs must be in /api/shop/images/<id> format. Returns { payload: {...}, updatedAt: string }. Requires authentication.",
+      inputSchema: {
+        payload: z12.record(z12.string(), z12.unknown()).describe(
+          "Partial ad fields to store in the draft. Any subset of haszno_shop_create_ad fields is accepted (e.g. { title, category, priceGross, description, images, attrs, \u2026 }). Image URLs must be in /api/shop/images/<id> format (from haszno_shop_upload_image)."
+        )
+      },
+      annotations: { readOnlyHint: false, destructiveHint: false, idempotentHint: true }
+    },
+    async (args) => {
+      try {
+        const result = await put("/api/v1/shop/my/draft", args.payload, opts);
+        return json2(result);
+      } catch (e) {
+        return mapApiError(e, "save_draft");
+      }
+    }
+  );
+  server.registerTool(
+    "haszno_shop_clear_draft",
+    {
+      title: "Discard the ad creation draft",
+      description: "Deletes the authenticated user's current ad creation draft. Idempotent \u2014 no error if no draft exists. Returns { ok: true }. Requires authentication.",
+      annotations: { readOnlyHint: false, destructiveHint: true, idempotentHint: true }
+    },
+    async () => {
+      try {
+        const result = await del("/api/v1/shop/my/draft", opts);
+        return json2(result);
+      } catch (e) {
+        return mapApiError(e, "clear_draft");
+      }
+    }
+  );
+  server.registerTool(
+    "haszno_shop_remove_background",
+    {
+      title: "Remove image background (AI)",
+      description: "Processes an already-uploaded image through the AI background removal service. The original image is preserved; a NEW image row is created with the processed result. Returns { id, url } of the NEW background-removed image (use this id/url in your ad). The source image must exist and belong to the authenticated user's shop. Rate-limited to 10 calls per hour. Returns error 503 when the background removal feature is not enabled on this server.",
+      inputSchema: {
+        imageId: z12.number().int().min(1).describe("ID of an already-uploaded image (from haszno_shop_upload_image)")
+      },
+      annotations: { readOnlyHint: false, destructiveHint: false, idempotentHint: false }
+    },
+    async (args) => {
+      try {
+        const result = await post(`/api/v1/shop/images/${args.imageId}/remove-bg`, {}, opts);
+        return json2(result);
+      } catch (e) {
+        return mapApiError(e, "remove_background");
       }
     }
   );
