@@ -2445,33 +2445,72 @@ function registerShopTools(server, opts) {
       if (args.base64 && !args.mimeType) {
         return mkErr2("base64 megad\xE1sakor mimeType is sz\xFCks\xE9ges (pl. image/jpeg).");
       }
+      const ALLOWED_EXTS = /* @__PURE__ */ new Set(["jpg", "jpeg", "png", "webp"]);
+      const ALLOWED_MIMES = /* @__PURE__ */ new Set(["image/jpeg", "image/png", "image/webp"]);
+      const MAX_SIZE_BYTES = 20 * 1024 * 1024;
+      function detectMimeFromBytes(buf) {
+        if (buf.length < 4) return null;
+        if (buf[0] === 255 && buf[1] === 216 && buf[2] === 255) return "image/jpeg";
+        if (buf[0] === 137 && buf[1] === 80 && buf[2] === 78 && buf[3] === 71) return "image/png";
+        if (buf.length >= 12 && buf[0] === 82 && buf[1] === 73 && buf[2] === 70 && buf[3] === 70 && buf[8] === 87 && buf[9] === 69 && buf[10] === 66 && buf[11] === 80) {
+          return "image/webp";
+        }
+        return null;
+      }
       let blob;
       let filename;
       if (args.filePath) {
+        const ext = args.filePath.split(".").pop()?.toLowerCase() ?? "";
+        if (!ALLOWED_EXTS.has(ext)) {
+          return mkErr2(`Csak JPEG, PNG \xE9s WebP f\xE1jlok t\xF6lthet\u0151k fel (kapott kiterjeszt\xE9s: .${ext || "ismeretlen"}).`);
+        }
         let buffer;
         try {
           buffer = fs2.readFileSync(args.filePath);
         } catch (e) {
           return mkErr2(`Nem siker\xFClt beolvasni a f\xE1jlt: ${String(e)}`);
         }
-        const ext = args.filePath.split(".").pop()?.toLowerCase() ?? "bin";
-        const mime = ext === "jpg" || ext === "jpeg" ? "image/jpeg" : ext === "png" ? "image/png" : ext === "webp" ? "image/webp" : "application/octet-stream";
-        blob = new Blob([buffer], { type: mime });
+        if (buffer.length > MAX_SIZE_BYTES) {
+          return mkErr2(`A f\xE1jl m\xE9rete (${(buffer.length / 1024 / 1024).toFixed(1)} MB) meghaladja a 20 MB-os hat\xE1rt.`);
+        }
+        const detectedMime = detectMimeFromBytes(buffer);
+        if (!detectedMime) {
+          return mkErr2("A f\xE1jl nem felismerhet\u0151 k\xE9pform\xE1tum (JPEG, PNG vagy WebP sz\xFCks\xE9ges).");
+        }
+        const extMime = { jpg: "image/jpeg", jpeg: "image/jpeg", png: "image/png", webp: "image/webp" };
+        if (detectedMime !== extMime[ext]) {
+          return mkErr2(`A f\xE1jl tartalma (${detectedMime}) nem egyezik a kiterjeszt\xE9ssel (.${ext}).`);
+        }
+        blob = new Blob([buffer], { type: detectedMime });
         filename = args.filePath.split("/").pop() ?? "image";
       } else {
+        const declaredMime = args.mimeType;
+        if (!ALLOWED_MIMES.has(declaredMime)) {
+          return mkErr2(`Nem t\xE1mogatott MIME t\xEDpus: ${declaredMime}. Csak image/jpeg, image/png \xE9s image/webp elfogadott.`);
+        }
         let buffer;
         try {
           buffer = Buffer.from(args.base64, "base64");
         } catch (e) {
           return mkErr2(`\xC9rv\xE9nytelen base64 adat: ${String(e)}`);
         }
-        blob = new Blob([buffer], { type: args.mimeType });
+        if (buffer.length > MAX_SIZE_BYTES) {
+          return mkErr2(`A k\xE9p m\xE9rete (${(buffer.length / 1024 / 1024).toFixed(1)} MB) meghaladja a 20 MB-os hat\xE1rt.`);
+        }
+        const detectedMime = detectMimeFromBytes(buffer);
+        if (!detectedMime) {
+          return mkErr2("A base64 adat nem felismerhet\u0151 k\xE9pform\xE1tum (JPEG, PNG vagy WebP sz\xFCks\xE9ges).");
+        }
+        if (detectedMime !== declaredMime) {
+          return mkErr2(`A k\xE9p val\xF3di form\xE1tuma (${detectedMime}) nem egyezik a megadott mimeType \xE9rt\xE9kkel (${declaredMime}).`);
+        }
+        blob = new Blob([buffer], { type: declaredMime });
         const extMap = {
           "image/jpeg": "jpg",
           "image/png": "png",
           "image/webp": "webp"
         };
-        filename = `upload.${extMap[args.mimeType] ?? "bin"}`;
+        filename = `upload.${extMap[declaredMime] ?? "bin"}`;
       }
       const formData = new FormData();
       formData.append("image", blob, filename);

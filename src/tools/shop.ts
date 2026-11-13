@@ -461,38 +461,94 @@ export function registerShopTools(server: McpServer, opts: HttpOptions): void {
         return mkErr('base64 megadásakor mimeType is szükséges (pl. image/jpeg).')
       }
 
+      // ── Security constants ────────────────────────────────────────────────
+      const ALLOWED_EXTS = new Set(['jpg', 'jpeg', 'png', 'webp'])
+      const ALLOWED_MIMES = new Set(['image/jpeg', 'image/png', 'image/webp'])
+      const MAX_SIZE_BYTES = 20 * 1024 * 1024 // 20 MB
+
+      // Magic-byte signatures for JPEG, PNG, and WebP.
+      function detectMimeFromBytes(buf: Buffer): string | null {
+        if (buf.length < 4) return null
+        if (buf[0] === 0xff && buf[1] === 0xd8 && buf[2] === 0xff) return 'image/jpeg'
+        if (buf[0] === 0x89 && buf[1] === 0x50 && buf[2] === 0x4e && buf[3] === 0x47) return 'image/png'
+        // WebP: bytes 0-3 = 'RIFF', bytes 8-11 = 'WEBP'
+        if (buf.length >= 12 &&
+            buf[0] === 0x52 && buf[1] === 0x49 && buf[2] === 0x46 && buf[3] === 0x46 &&
+            buf[8] === 0x57 && buf[9] === 0x45 && buf[10] === 0x42 && buf[11] === 0x50) {
+          return 'image/webp'
+        }
+        return null
+      }
+
       let blob: Blob
       let filename: string
 
       if (args.filePath) {
+        // Extension whitelist — reject anything not in the allowed set early.
+        const ext = args.filePath.split('.').pop()?.toLowerCase() ?? ''
+        if (!ALLOWED_EXTS.has(ext)) {
+          return mkErr(`Csak JPEG, PNG és WebP fájlok tölthetők fel (kapott kiterjesztés: .${ext || 'ismeretlen'}).`)
+        }
+
         let buffer: Buffer
         try {
           buffer = fs.readFileSync(args.filePath)
         } catch (e) {
           return mkErr(`Nem sikerült beolvasni a fájlt: ${String(e)}`)
         }
-        const ext = args.filePath.split('.').pop()?.toLowerCase() ?? 'bin'
-        const mime =
-          ext === 'jpg' || ext === 'jpeg' ? 'image/jpeg' :
-          ext === 'png' ? 'image/png' :
-          ext === 'webp' ? 'image/webp' : 'application/octet-stream'
-        blob = new Blob([buffer], { type: mime })
+
+        // Size cap.
+        if (buffer.length > MAX_SIZE_BYTES) {
+          return mkErr(`A fájl mérete (${(buffer.length / 1024 / 1024).toFixed(1)} MB) meghaladja a 20 MB-os határt.`)
+        }
+
+        // Magic-byte check — must match the declared extension.
+        const detectedMime = detectMimeFromBytes(buffer)
+        if (!detectedMime) {
+          return mkErr('A fájl nem felismerhető képformátum (JPEG, PNG vagy WebP szükséges).')
+        }
+        const extMime: Record<string, string> = { jpg: 'image/jpeg', jpeg: 'image/jpeg', png: 'image/png', webp: 'image/webp' }
+        if (detectedMime !== extMime[ext]) {
+          return mkErr(`A fájl tartalma (${detectedMime}) nem egyezik a kiterjesztéssel (.${ext}).`)
+        }
+
+        blob = new Blob([buffer], { type: detectedMime })
         filename = args.filePath.split('/').pop() ?? 'image'
       } else {
         // base64 path (checked above: args.base64 is set, args.mimeType is set)
+        const declaredMime = args.mimeType as string
+        if (!ALLOWED_MIMES.has(declaredMime)) {
+          return mkErr(`Nem támogatott MIME típus: ${declaredMime}. Csak image/jpeg, image/png és image/webp elfogadott.`)
+        }
+
         let buffer: Buffer
         try {
           buffer = Buffer.from(args.base64 as string, 'base64')
         } catch (e) {
           return mkErr(`Érvénytelen base64 adat: ${String(e)}`)
         }
-        blob = new Blob([buffer], { type: args.mimeType as string })
+
+        // Size cap.
+        if (buffer.length > MAX_SIZE_BYTES) {
+          return mkErr(`A kép mérete (${(buffer.length / 1024 / 1024).toFixed(1)} MB) meghaladja a 20 MB-os határt.`)
+        }
+
+        // Magic-byte check — must match declared MIME type.
+        const detectedMime = detectMimeFromBytes(buffer)
+        if (!detectedMime) {
+          return mkErr('A base64 adat nem felismerhető képformátum (JPEG, PNG vagy WebP szükséges).')
+        }
+        if (detectedMime !== declaredMime) {
+          return mkErr(`A kép valódi formátuma (${detectedMime}) nem egyezik a megadott mimeType értékkel (${declaredMime}).`)
+        }
+
+        blob = new Blob([buffer], { type: declaredMime })
         const extMap: Record<string, string> = {
           'image/jpeg': 'jpg',
           'image/png': 'png',
           'image/webp': 'webp',
         }
-        filename = `upload.${extMap[args.mimeType as string] ?? 'bin'}`
+        filename = `upload.${extMap[declaredMime] ?? 'bin'}`
       }
 
       const formData = new FormData()
