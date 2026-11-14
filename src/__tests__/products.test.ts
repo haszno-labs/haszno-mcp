@@ -11,6 +11,7 @@
  * No live network calls are made.
  */
 import { describe, it, expect, vi, beforeEach } from 'vitest'
+import { z } from 'zod'
 import type { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js'
 import type { HasznoClient, Product } from '../client/index.js'
 import { HasznoApiError, ShopTokenNotSupportedError } from '../client/index.js'
@@ -19,13 +20,15 @@ import { registerProductsTools } from '../tools/products.js'
 // ── Stub server ───────────────────────────────────────────────────────────────
 
 type ToolCallback = (args: Record<string, unknown>) => Promise<unknown>
-type ToolConfig = { title?: string; description?: string; annotations?: Record<string, unknown>; inputSchema?: unknown }
+type ToolConfig = { title?: string; description?: string; annotations?: Record<string, unknown>; inputSchema?: Record<string, z.ZodTypeAny> }
 
-function makeStubServer(): { server: McpServer; getToolCb: (name: string) => ToolCallback } {
+function makeStubServer(): { server: McpServer; getToolCb: (name: string) => ToolCallback; getToolConfig: (name: string) => ToolConfig } {
   const tools = new Map<string, ToolCallback>()
+  const configs = new Map<string, ToolConfig>()
   const server = {
     registerTool: (_name: string, _config: ToolConfig, cb: ToolCallback) => {
       tools.set(_name, cb)
+      configs.set(_name, _config)
       return {}
     },
   } as unknown as McpServer
@@ -35,6 +38,11 @@ function makeStubServer(): { server: McpServer; getToolCb: (name: string) => Too
       const cb = tools.get(name)
       if (!cb) throw new Error(`Tool "${name}" was not registered`)
       return cb
+    },
+    getToolConfig: (name: string) => {
+      const config = configs.get(name)
+      if (!config) throw new Error(`Tool "${name}" was not registered`)
+      return config
     },
   }
 }
@@ -187,6 +195,17 @@ describe('registerProductsTools', () => {
       expect(content[0].text).toContain('422')
       expect(content[0].text).toContain('invalid_request')
       expect(content[0].text).toContain('req-xyz')
+    })
+
+    it('marketShop inputSchema enforces max(120) — API limit, not 200', () => {
+      const config = stub.getToolConfig('haszno_products_update')
+      const schema = z.object(config.inputSchema!)
+      // 121 chars must fail (matches API validation at PATCH /api/products/:id)
+      const tooLong = schema.safeParse({ id: 1, marketShop: 'a'.repeat(121), confirm: true })
+      expect(tooLong.success).toBe(false)
+      // exactly 120 chars must pass
+      const exactLimit = schema.safeParse({ id: 1, marketShop: 'a'.repeat(120), confirm: true })
+      expect(exactLimit.success).toBe(true)
     })
   })
 

@@ -1675,6 +1675,7 @@ export function registerShopTools(
         'Updates the display name shown on the partner webshop\'s feed and embed widget.\n\n' +
         'PUT /api/v1/shop/partner/profile — body: { displayName }.\n\n' +
         'The displayName must be 2–60 characters.\n\n' +
+        'If the partner profile does not exist yet, call haszno_shop_partner_profile_get first — that call auto-creates it.\n\n' +
         'Requires confirm: true.',
       inputSchema: {
         displayName: z.string().min(2).max(60).describe('Display name shown on the partner feed (2–60 characters).'),

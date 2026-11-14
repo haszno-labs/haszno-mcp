@@ -219,8 +219,8 @@ Reserving is not paying: payment and handover happen directly between buyer and 
 - `haszno_shop_remove_background` — remove the background from an already-uploaded image (`imageId`); returns a new image object `{ id, url }`
 
 **Partner network & syndication (requires `sellerType = 'kereskedo'`)**
-- `haszno_shop_partner_profile_get` — get or auto-create your partner profile (displayName, description, sellerType, contactEmail, contactPhone, website); first call creates it
-- `haszno_shop_partner_profile_update` — update displayName (2–60 chars), description (up to 2000 chars), contactEmail, contactPhone, website
+- `haszno_shop_partner_profile_get` — get or auto-create your partner profile; returns `{ refCode, displayName, feedJsonUrl, feedXmlUrl, embedUrl }`; first call creates it
+- `haszno_shop_partner_profile_update` — update `displayName` (2–60 chars); call `haszno_shop_partner_profile_get` first if the profile may not exist yet
 - `haszno_shop_partner_syndications_list` — list your active ad syndications (markup is returned without the private multiplier)
 - `haszno_shop_partner_syndication_upsert` — create or update a syndicated ad listing (`adId`, `markupPct` 0–100, `markupFt` 0–50 000 000); requires `sellerType = 'kereskedo'` → 403 `seller_type_required` otherwise
 - `haszno_shop_partner_syndication_remove` — stop syndicating an ad (`adId`); requires `confirm: true`

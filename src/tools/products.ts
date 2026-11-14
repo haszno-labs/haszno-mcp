@@ -100,7 +100,7 @@ export function registerProductsTools(server: McpServer, client: HasznoClient): 
         marketMinGross: z.number().int().positive().optional().describe(
           'Cheapest competitor price in gross HUF (integer). Set to null to clear.',
         ).nullable(),
-        marketShop: z.string().max(200).optional().nullable().describe(
+        marketShop: z.string().max(120).optional().nullable().describe(
           'Name of the cheapest competitor shop. Set to null to clear.',
         ),
         priceGross: z.number().int().positive().optional().describe(
