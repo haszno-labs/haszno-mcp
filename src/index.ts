@@ -79,8 +79,73 @@ async function main() {
 
   const server = new McpServer({
     name: 'haszno',
-    version: '0.1.0',
+    version: '0.5.0',
   })
+
+  // ── MCP capabilities resource ──────────────────────────────────────────────
+  // Tells agents which credential mode is active and which tools are usable.
+  const credMode =
+    apiKey && apiKey.startsWith('haszno_') ? 'shopToken' :
+    apiKey ? 'legacyKey' :
+    basicAuth ? 'basic' :
+    'unauthenticated'
+
+  const capabilityDoc = {
+    credentialMode: credMode,
+    publicUrl: 'https://haszno.com',
+    apiPrefix: '/api/v1',
+    toolsAvailable: credMode === 'shopToken'
+      ? {
+          identity: ['haszno_account_whoami', 'haszno_ping'],
+          products: ['haszno_products_list'],
+          proposals: ['haszno_proposals_list', 'haszno_proposals_propose', 'haszno_proposals_market'],
+          orders: ['haszno_orders_list', 'haszno_orders_get'],
+          shop: ['haszno_shop_*'],
+          notes: [
+            'haszno_proposals_approve / reject / rollback are NOT available — requires human session',
+            'haszno_auth_revoke_token revokes this token (irreversible)',
+            'Write tools need a write-scope token; check tokenScope in haszno_account_whoami',
+          ],
+        }
+      : {
+          all: 'All tools available based on server configuration',
+          notes: [
+            'Legacy key / Basic: all tool namespaces work',
+            'Per-shop Bearer (haszno_) is the preferred credential for external agents',
+          ],
+        },
+    errorEnvelope: {
+      format: '{ error: string, code: string, requestId: string }',
+      codes: {
+        '400': 'invalid_request',
+        '401': 'unauthenticated — token invalid/expired/revoked',
+        '403': 'forbidden — read-scope token used on write, or seller_type_required',
+        '404': 'not_found',
+        '409': 'conflict — duplicate nonce on proposals.propose',
+        '413': 'payload_too_large',
+        '422': 'unprocessable — below price floor or validation error',
+        '429': 'rate_limited — back off and retry',
+      },
+    },
+  }
+
+  server.registerResource(
+    'capabilities',
+    'haszno://capabilities',
+    {
+      description:
+        'Describes the active credential mode, which tools are available, ' +
+        'and the API error envelope format. Read this first if you are unsure which tools to call.',
+      mimeType: 'application/json',
+    },
+    async () => ({
+      contents: [{
+        uri: 'haszno://capabilities',
+        mimeType: 'application/json',
+        text: JSON.stringify(capabilityDoc, null, 2),
+      }],
+    }),
+  )
 
   // Each domain registers its own tools; parallel agents only edit their domain file.
   registerCatalogTools(server, client)

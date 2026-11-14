@@ -131,13 +131,17 @@ export async function request<T>(
 
     if (!response.ok) {
       let message = `HTTP ${response.status}`
+      let code: string | undefined
+      let requestId: string | undefined = response.headers.get('x-request-id') ?? undefined
       try {
-        const json = (await response.json()) as { error?: string }
+        const json = (await response.json()) as { error?: string; code?: string; requestId?: string }
         if (json.error) message = json.error
+        if (json.code) code = json.code
+        if (json.requestId) requestId = json.requestId
       } catch {
         // ignore parse errors — keep generic message
       }
-      throw new HasznoApiError(response.status, message)
+      throw new HasznoApiError(response.status, message, code, requestId)
     }
 
     // 204 or empty body

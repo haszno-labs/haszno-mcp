@@ -229,6 +229,12 @@ Margin percentages are calculated on the net sale price after VAT.`,
 
 **WRITE operation — requires confirm: true.**
 
+**NOT available with a shop API token (haszno_).** Bearer tokens are permanently
+blocked from approval operations (the server returns 403 with
+"Az ügynök-token nem hagyhat jóvá árjavaslatokat"). Approval requires a human
+session. Use the Haszno web app at https://haszno.com/app/javaslatok instead.
+This tool works with legacy key (x-api-key) and HTTP Basic credentials.
+
 If \`ids\` is provided: approve only those proposal IDs.
 If \`ids\` is omitted: approve ALL pending proposals (batch-approve).
 
@@ -283,6 +289,11 @@ Workflow:
     `Reject price-change proposals so they will not be applied.
 
 **WRITE operation — requires confirm: true.**
+
+**NOT available with a shop API token (haszno_).** Bearer tokens are permanently
+blocked from rejection operations. Use the Haszno web app at
+https://haszno.com/app/javaslatok instead.
+This tool works with legacy key (x-api-key) and HTTP Basic credentials.
 
 Rejected proposals are kept in history (status becomes "rejected") so you can
 audit why a proposal was not applied.  Rejecting does NOT change any prices.
@@ -402,6 +413,11 @@ Error codes:
 
 **WRITE operation — requires confirm: true.**
 **DESTRUCTIVE: restores prices to their pre-approval values.**
+
+**NOT available with a shop API token (haszno_).** Bearer tokens are permanently
+blocked from rollback operations. Use the Haszno web app at
+https://haszno.com/app/javaslatok instead.
+This tool works with legacy key (x-api-key) and HTTP Basic credentials.
 
 Use this when an approval batch produced incorrect prices and you want to
 undo the whole batch atomically.  You need the \`batchId\` returned by

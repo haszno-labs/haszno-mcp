@@ -112,9 +112,38 @@ export class ShopTokenNotSupportedError extends Error {
 
 // ── Client interface ───────────────────────────────────────────────────────────
 
+/** Identity of the currently authenticated shop, returned by GET /api/auth/me. */
+export interface WhoAmI {
+  id: number
+  email: string
+  name: string
+  shopId: number
+  shopName: string
+  founderSince: string | null
+  role: string
+  tokenScope: string | null
+}
+
 export interface HasznoClient {
   health: {
     check(): Promise<{ ok: boolean }>
+  }
+
+  /** Identity & token operations — available to Bearer tokens and all other credential modes. */
+  auth: {
+    /**
+     * Returns identity of the authenticated shop.
+     * Works with Bearer, Basic, and x-api-key.
+     * Recommended first call to verify credentials and discover tokenScope.
+     * GET /api/v1/auth/me
+     */
+    me(): Promise<WhoAmI>
+    /**
+     * Revokes the current Bearer token (the one used in this request).
+     * Only works with Bearer tokens — not with Basic or x-api-key.
+     * POST /api/v1/auth/tokens/revoke-current
+     */
+    revokeCurrentToken(): Promise<{ ok: true }>
   }
 
   settings: {
@@ -290,6 +319,11 @@ function createShopTokenClient(opts: HttpOptions): HasznoClient {
       check: () => get('/api/health', o),
     },
 
+    auth: {
+      me: () => get('/api/v1/auth/me', o),
+      revokeCurrentToken: () => post('/api/v1/auth/tokens/revoke-current', null, o),
+    },
+
     // settings.get is not on the agent API — blocked
     settings: {
       get: notSupported('settings.get'),
@@ -413,6 +447,11 @@ function createLegacyClient(opts: HttpOptions): HasznoClient {
   return {
     health: {
       check: () => get('/api/health', o),
+    },
+
+    auth: {
+      me: () => get('/api/v1/auth/me', o),
+      revokeCurrentToken: () => post('/api/v1/auth/tokens/revoke-current', null, o),
     },
 
     settings: {

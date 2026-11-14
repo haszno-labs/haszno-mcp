@@ -272,4 +272,67 @@ export function registerAccountTools(server: McpServer, client: HasznoClient): v
       }
     },
   )
+
+  // ─── haszno_account_whoami ──────────────────────────────────────────────────
+  server.registerTool(
+    'haszno_account_whoami',
+    {
+      title: 'Who am I (identity check)',
+      description:
+        'Returns the identity of the currently authenticated shop: id, email, name, shopId, shopName, ' +
+        'founderSince, role, and tokenScope.\n\n' +
+        'Works with every credential mode (Bearer shop token, HTTP Basic, x-api-key).\n\n' +
+        'The tokenScope field is especially useful for shop API tokens: ' +
+        '"read" means GET-only access; "write" means full agent access including POST /api/agent/proposals. ' +
+        'A null tokenScope means session or legacy key (all operations available).\n\n' +
+        'Use this as the recommended first call to verify credentials and discover your scope. ' +
+        'GET /api/v1/auth/me.',
+      annotations: { readOnlyHint: true, destructiveHint: false },
+    },
+    async () => {
+      try {
+        const identity = await client.auth.me()
+        return json(identity)
+      } catch (e) {
+        if (e instanceof Error) {
+          const hint =
+            (e as { status?: number }).status === 401
+              ? ' (token érvénytelen, lejárt vagy visszavont — ellenőrizd a HASZNO_API_TOKEN értékét)'
+              : ''
+          return mkErr(`haszno_account_whoami sikertelen: ${e.message}${hint}`)
+        }
+        return mkErr(`haszno_account_whoami: ${String(e)}`)
+      }
+    },
+  )
+
+  // ─── haszno_auth_revoke_token ───────────────────────────────────────────────
+  server.registerTool(
+    'haszno_auth_revoke_token',
+    {
+      title: 'Revoke current Bearer token',
+      description:
+        'Revokes the shop API token used by the current MCP session. ' +
+        'After revocation the token is dead immediately (the server does a live DB lookup on every request).\n\n' +
+        '**Only works with a Bearer shop API token (haszno_)** — calling this with Basic or x-api-key returns an error.\n\n' +
+        'POST /api/v1/auth/tokens/revoke-current — returns { ok: true }.\n\n' +
+        'Use this when decommissioning a CI/CD agent or rotating credentials. ' +
+        'Requires confirm: true.',
+      inputSchema: {
+        confirm: z.literal(true).describe('Must be exactly true (safety gate — this is irreversible).'),
+      },
+      annotations: { readOnlyHint: false, destructiveHint: true, idempotentHint: false },
+    },
+    async () => {
+      try {
+        const result = await client.auth.revokeCurrentToken()
+        return json({ ...result, note: 'Token visszavonva. A kapcsolat ezentúl 401-gyel fog visszatérni.' })
+      } catch (e) {
+        if (e instanceof Error) {
+          return mkErr(`haszno_auth_revoke_token sikertelen: ${e.message}`)
+        }
+        return mkErr(`haszno_auth_revoke_token: ${String(e)}`)
+      }
+    },
+  )
 }

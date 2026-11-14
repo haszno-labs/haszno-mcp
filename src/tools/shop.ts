@@ -1630,4 +1630,222 @@ export function registerShopTools(
       }
     },
   )
+
+  // ══════════════════════════════════════════════════════════════════════════════
+  // Partner (reseller webshop) tools
+  // All routes under /api/v1/shop/partner/* — require auth.
+  // The PUT syndication also requires sellerType = 'kereskedo'; if the shop is a
+  // private individual (maganszemely) or has no sellerType set, the server returns
+  // 403 with code "seller_type_required". Use haszno_account_whoami to check.
+  // ══════════════════════════════════════════════════════════════════════════════
+
+  // ─── haszno_shop_partner_profile_get ──────────────────────────────────────
+
+  server.registerTool(
+    'haszno_shop_partner_profile_get',
+    {
+      title: 'Get partner (reseller) profile',
+      description:
+        'Returns the shop\'s partner (reseller webshop) profile. ' +
+        'The partner profile is created automatically on the first call if it does not exist yet.\n\n' +
+        'Returns: refCode (unique code used in feed URLs), displayName, feedJsonUrl ' +
+        '(GET to fetch the JSON product feed), feedXmlUrl (Google Merchant XML feed), embedUrl.\n\n' +
+        'The feed URLs are public — no auth required. Partner webshops embed or poll them to list ' +
+        'the ads the shop has syndicated.\n\n' +
+        'GET /api/v1/shop/partner/profile.',
+      annotations: { readOnlyHint: true, destructiveHint: false },
+    },
+    async () => {
+      try {
+        const profile = await get('/api/v1/shop/partner/profile', opts)
+        return json(profile)
+      } catch (e) {
+        return mapApiError(e, 'partner_profile_get')
+      }
+    },
+  )
+
+  // ─── haszno_shop_partner_profile_update ───────────────────────────────────
+
+  server.registerTool(
+    'haszno_shop_partner_profile_update',
+    {
+      title: 'Update partner display name',
+      description:
+        'Updates the display name shown on the partner webshop\'s feed and embed widget.\n\n' +
+        'PUT /api/v1/shop/partner/profile — body: { displayName }.\n\n' +
+        'The displayName must be 2–60 characters.\n\n' +
+        'Requires confirm: true.',
+      inputSchema: {
+        displayName: z.string().min(2).max(60).describe('Display name shown on the partner feed (2–60 characters).'),
+        confirm: z.literal(true).describe('Must be exactly true (safety gate).'),
+      },
+      annotations: { readOnlyHint: false, destructiveHint: false, idempotentHint: true },
+    },
+    async (args) => {
+      try {
+        const updated = await put('/api/v1/shop/partner/profile', { displayName: args.displayName }, opts)
+        return json(updated)
+      } catch (e) {
+        return mapApiError(e, 'partner_profile_update')
+      }
+    },
+  )
+
+  // ─── haszno_shop_partner_syndications_list ────────────────────────────────
+
+  server.registerTool(
+    'haszno_shop_partner_syndications_list',
+    {
+      title: 'List syndicated partner ads',
+      description:
+        'Returns the list of marketplace ads the shop has syndicated into its partner feed.\n\n' +
+        'Each entry includes: adId (the original ad\'s ID), markupPct (gross markup %), ' +
+        'markupFt (flat markup in HUF), and the computed partnerPriceGross.\n\n' +
+        'The markup is only shown to the authenticated partner shop that owns it — it is ' +
+        'never visible to the original seller or other shops (antitrust / privacy).\n\n' +
+        'GET /api/v1/shop/partner/syndications.',
+      annotations: { readOnlyHint: true, destructiveHint: false },
+    },
+    async () => {
+      try {
+        const syndications = await get('/api/v1/shop/partner/syndications', opts)
+        return json(syndications)
+      } catch (e) {
+        return mapApiError(e, 'partner_syndications_list')
+      }
+    },
+  )
+
+  // ─── haszno_shop_partner_syndication_upsert ───────────────────────────────
+
+  server.registerTool(
+    'haszno_shop_partner_syndication_upsert',
+    {
+      title: 'Add or update a syndicated ad',
+      description:
+        'Adds a marketplace ad to the shop\'s partner feed, or updates an existing syndication.\n\n' +
+        '**Requires the shop to be a registered trader (sellerType = "kereskedo")**. ' +
+        'Private-person shops (maganszemely) cannot syndicate ads — the server returns 403 ' +
+        'with code "seller_type_required". Use haszno_account_whoami to verify your role.\n\n' +
+        'The partner price is computed as: ' +
+        'max(adAskingPrice, adAskingPrice × (1 + markupPct/100) + markupFt).\n\n' +
+        'PUT /api/v1/shop/partner/syndications/:adId — body: { markupPct, markupFt }.\n\n' +
+        'markupPct: 0–100 (percentage markup on the ad\'s asking price). ' +
+        'markupFt: 0–50 000 000 (flat HUF markup, integer). ' +
+        'Requires confirm: true.',
+      inputSchema: {
+        adId: z.number().int().positive().describe('ID of the marketplace ad to syndicate.'),
+        markupPct: z.number().min(0).max(100).describe(
+          'Percentage markup on the original asking price (0–100). E.g. 5 = 5% above the asking price.',
+        ),
+        markupFt: z.number().int().min(0).max(50_000_000).describe(
+          'Flat gross HUF markup (0–50 000 000, integer). Added on top of the percentage markup.',
+        ),
+        confirm: z.literal(true).describe('Must be exactly true (safety gate).'),
+      },
+      annotations: { readOnlyHint: false, destructiveHint: false, idempotentHint: true },
+    },
+    async (args) => {
+      try {
+        const result = await put(
+          `/api/v1/shop/partner/syndications/${args.adId}`,
+          { markupPct: args.markupPct, markupFt: args.markupFt },
+          opts,
+        )
+        return json(result)
+      } catch (e) {
+        return mapApiError(e, 'partner_syndication_upsert')
+      }
+    },
+  )
+
+  // ─── haszno_shop_partner_syndication_remove ───────────────────────────────
+
+  server.registerTool(
+    'haszno_shop_partner_syndication_remove',
+    {
+      title: 'Remove a syndicated ad from the partner feed',
+      description:
+        'Removes a marketplace ad from the shop\'s partner feed. ' +
+        'The original ad is not affected — it remains listed on the marketplace.\n\n' +
+        'DELETE /api/v1/shop/partner/syndications/:adId — returns { ok: true }.\n\n' +
+        'Requires confirm: true.',
+      inputSchema: {
+        adId: z.number().int().positive().describe('ID of the syndicated ad to remove from the feed.'),
+        confirm: z.literal(true).describe('Must be exactly true (safety gate).'),
+      },
+      annotations: { readOnlyHint: false, destructiveHint: false, idempotentHint: true },
+    },
+    async (args) => {
+      try {
+        const result = await del(`/api/v1/shop/partner/syndications/${args.adId}`, opts)
+        return json(result)
+      } catch (e) {
+        return mapApiError(e, 'partner_syndication_remove')
+      }
+    },
+  )
+
+  // ══════════════════════════════════════════════════════════════════════════════
+  // Moderation tools — GET /api/v1/shop/my/moderation + appeal
+  // ══════════════════════════════════════════════════════════════════════════════
+
+  // ─── haszno_shop_moderation_list ──────────────────────────────────────────
+
+  server.registerTool(
+    'haszno_shop_moderation_list',
+    {
+      title: 'List moderation actions on my ads',
+      description:
+        'Returns the moderation decisions (actions taken by moderators) on the authenticated shop\'s ads.\n\n' +
+        'Each entry includes: id, adId, reason (ModerationReasonCode), action taken, ' +
+        'createdAt, and whether an appeal is still possible.\n\n' +
+        'Use this to audit which ads were moderated and understand the reason codes. ' +
+        'If an action is still appealable, use haszno_shop_moderation_appeal.\n\n' +
+        'GET /api/v1/shop/my/moderation.',
+      annotations: { readOnlyHint: true, destructiveHint: false },
+    },
+    async () => {
+      try {
+        const actions = await get('/api/v1/shop/my/moderation', opts)
+        return json(actions)
+      } catch (e) {
+        return mapApiError(e, 'moderation_list')
+      }
+    },
+  )
+
+  // ─── haszno_shop_moderation_appeal ────────────────────────────────────────
+
+  server.registerTool(
+    'haszno_shop_moderation_appeal',
+    {
+      title: 'Appeal a moderation decision',
+      description:
+        'Submits an appeal against a moderation decision. ' +
+        'The appeal message is sent to the moderation team for review.\n\n' +
+        'POST /api/v1/shop/my/moderation/:id/appeal — body: { message }.\n\n' +
+        'The message must be 10–2000 characters. ' +
+        'Appeals can only be submitted once per moderation action. ' +
+        'Returns { ok: true } on success.\n\n' +
+        'Requires confirm: true.',
+      inputSchema: {
+        id: z.number().int().positive().describe('Moderation action ID (from haszno_shop_moderation_list).'),
+        message: z.string().min(10).max(2000).describe(
+          'Appeal message explaining why the moderation decision should be reconsidered (10–2000 characters).',
+        ),
+        confirm: z.literal(true).describe('Must be exactly true (safety gate).'),
+      },
+      annotations: { readOnlyHint: false, destructiveHint: false, idempotentHint: false },
+    },
+    async (args) => {
+      try {
+        const result = await post(`/api/v1/shop/my/moderation/${args.id}/appeal`, { message: args.message }, opts)
+        return json(result)
+      } catch (e) {
+        return mapApiError(e, 'moderation_appeal')
+      }
+    },
+  )
 }
