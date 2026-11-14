@@ -33,6 +33,7 @@ import { registerConnectionsTools } from './tools/connections.js'
 import { registerPeersTools } from './tools/peers.js'
 import { registerBlogTools } from './tools/blog.js'
 import { registerManagerTools } from './tools/manager.js'
+import { registerShopTools } from './tools/shop.js'
 
 /** Read flat config from ~/.config/haszno/config.json with ~/.config/arfutar fallback. */
 function readHasznoConfig(): { apiUrl?: string; apiKey?: string; basicAuth?: string } {
@@ -74,7 +75,8 @@ async function main() {
     if (!apiUrl) apiUrl = config.apiUrl
   }
 
-  const client = createClient({ apiKey, basicAuth, baseUrl: apiUrl })
+  const httpOpts = { apiKey, basicAuth, baseUrl: apiUrl }
+  const client = createClient(httpOpts)
 
   const server = new McpServer({
     name: 'haszno',
@@ -95,6 +97,7 @@ async function main() {
   registerPeersTools(server, client)
   registerBlogTools(server, client)
   registerManagerTools(server, client)
+  registerShopTools(server, httpOpts)
 
   const transport = new StdioServerTransport()
   await server.connect(transport)

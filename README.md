@@ -217,6 +217,92 @@ haszno_propose_action({
 })
 // → AgentAction { status: "javasolt" } — waiting for the owner to approve
 ```
+### Marketplace / Shop (`haszno_shop_*`)
+
+The Haszno Shop (Hirdetési Piactér) is **completely free** — no listing or usage fees.
+Reserving is not paying: payment and handover happen directly between buyer and seller.
+
+**Read (no side effects)**
+- `haszno_shop_list_categories` — full category taxonomy (categories with `key`, `attrs` per category, `conditions`, `counties`)
+- `haszno_shop_search_ads` — search public ads (`q`, `cat`, `sub`, `min`, `max`, `county`, `city`, `cond`, `sort`, `page`); sort values: `uj` (newest), `ar_nov` (price asc), `ar_csokk` (price desc)
+- `haszno_shop_get_ad` — single ad detail including the `reserved` flag
+- `haszno_shop_price_hint` — suggested price range (p25–p75) for a `cat` (category key) and optional `sub` subcategory key
+- `haszno_shop_list_my_ads` — your own non-deleted ads
+- `haszno_shop_list_inquiries` — messages buyers sent to your ads (`adId?`, `limit`, `offset`)
+- `haszno_shop_list_favorites` — your saved favorite ads
+- `haszno_shop_list_reservations` — your reservations as `buyer` (default) or `seller`; response includes `counterPriceGross` (seller counter-offer), `agreedPriceGross` (mutually agreed price), and `sellerRating` (buyer's rating of seller after completion)
+- `haszno_shop_list_messages` — messages in a reservation thread (`id` = reservation ID); response items include `author` (`buyer`|`seller`), `body`, `createdAt`
+- `haszno_shop_list_saved_searches` — your saved searches with alert settings; returns `{ id, name, filters, alertEnabled, lastAlertSentAt, createdAt }[]`
+- `haszno_shop_get_draft` — fetch your in-progress ad draft (returns `null` if none exists)
+
+**Write (require authentication; destructive actions require `confirm: true`)**
+- `haszno_shop_upload_image` — upload a local file (`filePath`) or base64 image (`base64` + `mimeType`), max 700 KB, returns `{ id, url }`
+- `haszno_shop_suggest_from_photos` — AI pre-fill ad fields from uploaded image IDs (`imageIds: number[]`, 1–3)
+- `haszno_shop_create_ad` — post a new ad (validates required category attrs before sending) *(confirm: true)*
+- `haszno_shop_update_ad` — edit an existing ad (fetches current state then PUTs merged body)
+- `haszno_shop_set_ad_status` — `aktiv` (show/reactivate), `szunetel` (pause), or `torolve` (permanently delete)
+- `haszno_shop_mark_sold` — mark an ad sold (irreversible) *(confirm: true)*
+- `haszno_shop_renew_ad` — reset 60-day expiry and bump ad to top of search
+- `haszno_shop_send_inquiry` — send a question to the seller (`adId`, `name`, `email`, `message`)
+- `haszno_shop_set_favorite` — save (`save: true`) or remove (`save: false`) a favorite
+- `haszno_shop_reserve_ad` — place a reservation on an ad (not a payment; `message?`, `offerPriceGross?`, `phone?`) *(confirm: true)*
+- `haszno_shop_respond_reservation` — `accept` or `decline` a reservation (seller)
+- `haszno_shop_cancel_reservation` — cancel your own reservation, sets status `visszavonva` (buyer)
+- `haszno_shop_complete_reservation` — mark a reservation fulfilled → ad becomes `eladva` (seller, irreversible) *(confirm: true)*
+- `haszno_shop_counter_offer` — seller proposes a counter-price on a pending reservation (`id`, `priceGross`); sets `counterPriceGross` on the reservation
+- `haszno_shop_accept_counter` — buyer accepts the seller's counter-offer (`id`); `offerPriceGross` is updated to the agreed price
+- `haszno_shop_send_message` — send a message in a reservation thread (`id`, `body`); returns `{ message: { id, author, body, createdAt } }`
+- `haszno_shop_review` — buyer leaves a star rating + optional comment after a completed reservation (`id`, `rating` 1–5, `comment?`) *(confirm: true)*
+- `haszno_shop_reply_inquiry` — seller replies to a buyer's inquiry (`id` = inquiry ID, `message`); returns `{ reply: { id, inquiryId, message, createdAt } }`
+- `haszno_shop_save_search` — save a search with optional price-alert (`name`, `filters`, `alertEnabled?`)
+- `haszno_shop_delete_saved_search` — delete a saved search by `id`
+- `haszno_shop_watch_price` — subscribe (`watch: true`) or unsubscribe (`watch: false`) to price-change alerts on an ad (`adId`)
+- `haszno_shop_import_from_url` — AI-extract ad fields (title, description, price, images) from a product page URL; returns `{ title?, description?, price?, images[], parsed }`
+- `haszno_shop_save_draft` — save or overwrite your in-progress ad draft (`payload`: partial ad fields); returns the saved draft with `updatedAt`
+- `haszno_shop_clear_draft` — permanently delete your ad draft
+- `haszno_shop_remove_background` — remove the background from an already-uploaded image (`imageId`); returns a new image object `{ id, url }`
+
+**Reservation statuses:** `fuggoben` (pending), `elfogadva` (accepted), `elutasitva` (declined/auto-declined), `visszavonva` (cancelled by buyer), `teljesitve` (completed), `lejart` (hold expired)
+
+**Price negotiation flow:** buyer places reservation (`offerPriceGross?`) → seller counters (`haszno_shop_counter_offer`) → buyer accepts (`haszno_shop_accept_counter`) → `agreedPriceGross` is set → seller completes → buyer reviews
+
+---
+
+## Library entry (`@haszno/mcp/lib`)
+
+The package ships a side-effect-free library entry for **hosted (HTTP/remote) MCP endpoints**.
+Importing it starts no server, reads no env vars, and touches no files.
+
+```ts
+import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js'
+import { registerShopTools, type HttpOptions } from '@haszno/mcp/lib'
+
+const server = new McpServer({ name: 'my-server', version: '1.0.0' })
+
+registerShopTools(
+  server,
+  {
+    apiKey:  req.headers['x-haszno-token'], // per-request credential
+    baseUrl: process.env.HASZNO_API_BASE,
+    fetch,                                  // supply the runtime's fetch
+  },
+  { remote: true },  // ← enables remote mode
+)
+```
+
+`remote: true` guarantees:
+
+- **`haszno_shop_upload_image`** — `filePath` is absent from the tool schema; the handler
+  only accepts `base64 + mimeType` and never calls `fs.readFileSync`.
+- **No env-var fallbacks** — `HASZNO_API_TOKEN`, `HASZNO_API_KEY`, `HASZNO_API_URL`, etc.
+  are ignored. All credentials and the base URL must come from the `opts` argument.
+
+Peer dependencies (must be installed by the host application):
+
+| Package | Version |
+|---|---|
+| `@modelcontextprotocol/sdk` | `^1.12.0` |
+| `zod` | `^4.0` |
 
 ---
 
@@ -224,7 +310,7 @@ haszno_propose_action({
 
 ```bash
 npm install
-npm run build      # tsup build
+npm run build      # tsup build (emits dist/index.js + dist/lib.js)
 npm test           # vitest run
 npm run typecheck  # tsc --noEmit
 ```
