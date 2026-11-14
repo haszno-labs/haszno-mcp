@@ -2700,7 +2700,7 @@ function mapApiError(e, context) {
   }
   return mkErr3(`${context}: ${String(e)}`);
 }
-function mapApplyError(e) {
+function mapApplyError(e, adId) {
   if (e instanceof HasznoApiError) {
     const code = e.code ?? "";
     if (code === "auto_apply_disabled" || e.status === 403) {
@@ -2708,15 +2708,18 @@ function mapApplyError(e) {
         `apply: Az automatikus jelentkez\xE9s (\xFCgyn\xF6k \xE1ltal) nincs enged\xE9lyezve. A felhaszn\xE1l\xF3nak be kell kapcsolnia az \u201EAutomatikus jelentkez\xE9s \xFCgyn\xF6kkel" opci\xF3t. Ezt megteheti a Haszno webes fel\xFCleten (https://haszno.com/shop/oneletrajzom), vagy explicit felhaszn\xE1l\xF3i k\xE9r\xE9s eset\xE9n a haszno_shop_job_profile_save h\xEDv\xE1ssal (autoApply: true). API v\xE1lasz: [${e.status}] ${e.message}`
       );
     }
-    if (code === "profile_required" || e.status === 409) {
+    if (e.status === 409) {
       if (code === "already_applied") {
         return mkErr3(
-          `apply: M\xE1r jelentkezt\xE9l erre a hirdet\xE9sre (adId). Ugyanarra a hirdet\xE9sre csak egyszer lehet jelentkezni. [${e.status}] ${e.message}`
+          `apply: M\xE1r jelentkezt\xE9l erre a hirdet\xE9sre (adId: ${adId}). Ugyanarra a hirdet\xE9sre csak egyszer lehet jelentkezni. [${e.status}] ${e.message}`
         );
       }
-      return mkErr3(
-        `apply: A jelentkez\xE9shez teljes \xF6n\xE9letrajz-profil sz\xFCks\xE9ges (consent: true \xE9s felt\xF6lt\xF6tt PDF \xF6n\xE9letrajz). Hozz l\xE9tre profilt a haszno_shop_job_profile_save eszk\xF6zzel (consent: true), majd t\xF6ltsd fel az \xF6n\xE9letrajzat PDF-ben a haszno_shop_job_cv_upload eszk\xF6zzel, \xE9s pr\xF3b\xE1ld \xFAjra. API v\xE1lasz: [${e.status}] ${e.message}`
-      );
+      if (code === "profile_required") {
+        return mkErr3(
+          `apply: A jelentkez\xE9shez teljes \xF6n\xE9letrajz-profil sz\xFCks\xE9ges (consent: true \xE9s felt\xF6lt\xF6tt PDF \xF6n\xE9letrajz). Hozz l\xE9tre profilt a haszno_shop_job_profile_save eszk\xF6zzel (consent: true), majd t\xF6ltsd fel az \xF6n\xE9letrajzat PDF-ben a haszno_shop_job_cv_upload eszk\xF6zzel, \xE9s pr\xF3b\xE1ld \xFAjra. API v\xE1lasz: [${e.status}] ${e.message}`
+        );
+      }
+      return mkErr3(`apply: [${e.status}] ${e.message} (code: ${code})`);
     }
     if (e.status === 429) {
       return mkErr3(
@@ -2891,6 +2894,63 @@ function registerJobTools(server, opts, flags = {}) {
       }
     }
   );
+  server.registerTool(
+    "haszno_shop_job_profile_delete",
+    {
+      title: "Delete job-seeker profile",
+      description: "Permanently deletes the authenticated user's job-seeker profile and uploaded CV. This action is irreversible: all profile data, the CV file, and the consent record are removed. Existing submitted applications are not deleted (they remain in the advertiser's view). Only call this when the user explicitly asks to delete their profile. DELETE /api/v1/shop/jobs/profile \u2192 { ok: true }.",
+      annotations: { readOnlyHint: false, destructiveHint: true, idempotentHint: false }
+    },
+    async () => {
+      try {
+        const result = await del("/api/v1/shop/jobs/profile", opts);
+        return json3(result);
+      } catch (e) {
+        return mapApiError(e, "job_profile_delete");
+      }
+    }
+  );
+  if (flags.remote) {
+    server.registerTool(
+      "haszno_shop_job_cv_get",
+      {
+        title: "Download own CV (remote mode)",
+        description: "Remote MCP mode: the CV cannot be streamed as bytes through the hosted MCP endpoint. To view or download your CV, open your profile page: https://haszno.com/shop/oneletrajzom. CV content is personal data \u2014 do not share it with other services.",
+        annotations: { readOnlyHint: true, destructiveHint: false }
+      },
+      async () => {
+        return json3({
+          notice: "Remote MCP mode: az \xF6n\xE9letrajz nem t\xF6lthet\u0151 le b\xE1jtonk\xE9nt a hosted MCP v\xE9gponton kereszt\xFCl. A PDF megtekint\xE9s\xE9hez nyisd meg a profil oldalt: https://haszno.com/shop/oneletrajzom"
+        });
+      }
+    );
+  } else {
+    server.registerTool(
+      "haszno_shop_job_cv_get",
+      {
+        title: "Download own CV to a local file",
+        description: "Downloads the authenticated user's own CV PDF to a local file. Provide savePath for the destination (e.g. /tmp/my-cv.pdf). If savePath is omitted, the file is saved to the system temp directory. Returns the saved file path and size. CV content is personal data \u2014 do not paste it into other services or logs. GET /api/v1/shop/jobs/profile/cv \u2192 PDF (binary).",
+        inputSchema: {
+          savePath: z14.string().optional().describe("Absolute path where the PDF will be saved (e.g. /tmp/my-cv.pdf). Defaults to a temp file.")
+        },
+        annotations: { readOnlyHint: true, destructiveHint: false }
+      },
+      async (args) => {
+        try {
+          const pdfBuffer = await getRawBinary("/api/v1/shop/jobs/profile/cv", opts);
+          const dest = args.savePath ?? path2.join(os2.tmpdir(), "haszno-my-cv.pdf");
+          try {
+            fs2.writeFileSync(dest, pdfBuffer);
+          } catch (e) {
+            return mkErr3(`job_cv_get: Nem siker\xFClt menteni a f\xE1jlt (${dest}): ${String(e)}`);
+          }
+          return json3({ savedPath: dest, sizeBytes: pdfBuffer.length });
+        } catch (e) {
+          return mapApiError(e, "job_cv_get");
+        }
+      }
+    );
+  }
   if (flags.remote) {
     server.registerTool(
       "haszno_shop_job_cv_upload",
@@ -3038,7 +3098,7 @@ POST /api/v1/shop/ads/{adId}/applications \u2192 201 { application }.`,
         const result = await post(`/api/v1/shop/ads/${args.adId}/applications`, body, opts);
         return json3(result);
       } catch (e) {
-        return mapApplyError(e);
+        return mapApplyError(e, args.adId);
       }
     }
   );

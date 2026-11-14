@@ -5,13 +5,15 @@
  * Auth is passed through opts (Bearer haszno_ token or legacy key/Basic).
  *
  * Job-seeker (applicant) side:
- *   haszno_shop_job_profile_get       — GET  /shop/jobs/profile
- *   haszno_shop_job_profile_save      — PUT  /shop/jobs/profile
- *   haszno_shop_job_cv_upload         — PUT  /shop/jobs/profile/cv (raw PDF)
- *   haszno_shop_job_matches           — GET  /shop/jobs/matches
- *   haszno_shop_job_apply             — POST /shop/ads/{adId}/applications
- *   haszno_shop_job_my_applications   — GET  /shop/my/applications
- *   haszno_shop_job_withdraw          — POST /shop/my/applications/{id}/withdraw
+ *   haszno_shop_job_profile_get       — GET    /shop/jobs/profile
+ *   haszno_shop_job_profile_save      — PUT    /shop/jobs/profile
+ *   haszno_shop_job_profile_delete    — DELETE /shop/jobs/profile
+ *   haszno_shop_job_cv_upload         — PUT    /shop/jobs/profile/cv (raw PDF)
+ *   haszno_shop_job_cv_get            — GET    /shop/jobs/profile/cv (download own CV)
+ *   haszno_shop_job_matches           — GET    /shop/jobs/matches
+ *   haszno_shop_job_apply             — POST   /shop/ads/{adId}/applications
+ *   haszno_shop_job_my_applications   — GET    /shop/my/applications
+ *   haszno_shop_job_withdraw          — POST   /shop/my/applications/{id}/withdraw
  *
  * Advertiser (employer) side:
  *   haszno_shop_job_applicants_list   — GET   /shop/my/job-applications
@@ -23,7 +25,7 @@ import * as path from 'node:path'
 import * as os from 'node:os'
 import { z } from 'zod'
 import type { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js'
-import { get, post, put, patch, type HttpOptions, SHOP_TOKEN_PREFIX } from '../client/http.js'
+import { get, post, put, patch, del, type HttpOptions, SHOP_TOKEN_PREFIX } from '../client/http.js'
 import { HasznoApiError } from '../client/error.js'
 
 // ── Shared helpers ─────────────────────────────────────────────────────────────
@@ -56,7 +58,7 @@ function mapApiError(e: unknown, context: string): { content: Array<{ type: 'tex
  * Error mapper specifically for the apply tool — maps job-specific error codes
  * to clear agent-readable messages with actionable next steps.
  */
-function mapApplyError(e: unknown): { content: Array<{ type: 'text'; text: string }>; isError: true } {
+function mapApplyError(e: unknown, adId: number): { content: Array<{ type: 'text'; text: string }>; isError: true } {
   if (e instanceof HasznoApiError) {
     const code = e.code ?? ''
     if (code === 'auto_apply_disabled' || e.status === 403) {
@@ -68,19 +70,22 @@ function mapApplyError(e: unknown): { content: Array<{ type: 'text'; text: strin
         `API válasz: [${e.status}] ${e.message}`
       )
     }
-    if (code === 'profile_required' || e.status === 409) {
-      // Could also be already_applied (409) — check the code
+    if (e.status === 409) {
       if (code === 'already_applied') {
         return mkErr(
-          `apply: Már jelentkeztél erre a hirdetésre (adId). Ugyanarra a hirdetésre csak egyszer lehet jelentkezni. [${e.status}] ${e.message}`
+          `apply: Már jelentkeztél erre a hirdetésre (adId: ${adId}). Ugyanarra a hirdetésre csak egyszer lehet jelentkezni. [${e.status}] ${e.message}`
         )
       }
-      return mkErr(
-        'apply: A jelentkezéshez teljes önéletrajz-profil szükséges (consent: true és feltöltött PDF önéletrajz). ' +
-        'Hozz létre profilt a haszno_shop_job_profile_save eszközzel (consent: true), ' +
-        'majd töltsd fel az önéletrajzat PDF-ben a haszno_shop_job_cv_upload eszközzel, és próbáld újra. ' +
-        `API válasz: [${e.status}] ${e.message}`
-      )
+      if (code === 'profile_required') {
+        return mkErr(
+          'apply: A jelentkezéshez teljes önéletrajz-profil szükséges (consent: true és feltöltött PDF önéletrajz). ' +
+          'Hozz létre profilt a haszno_shop_job_profile_save eszközzel (consent: true), ' +
+          'majd töltsd fel az önéletrajzat PDF-ben a haszno_shop_job_cv_upload eszközzel, és próbáld újra. ' +
+          `API válasz: [${e.status}] ${e.message}`
+        )
+      }
+      // Unknown 409 code — fall back to the generic message
+      return mkErr(`apply: [${e.status}] ${e.message} (code: ${code})`)
     }
     if (e.status === 429) {
       return mkErr(
@@ -327,6 +332,87 @@ export function registerJobTools(
     },
   )
 
+  // ─── haszno_shop_job_profile_delete ──────────────────────────────────────
+
+  server.registerTool(
+    'haszno_shop_job_profile_delete',
+    {
+      title: 'Delete job-seeker profile',
+      description:
+        'Permanently deletes the authenticated user\'s job-seeker profile and uploaded CV. ' +
+        'This action is irreversible: all profile data, the CV file, and the consent record are removed. ' +
+        'Existing submitted applications are not deleted (they remain in the advertiser\'s view). ' +
+        'Only call this when the user explicitly asks to delete their profile. ' +
+        'DELETE /api/v1/shop/jobs/profile → { ok: true }.',
+      annotations: { readOnlyHint: false, destructiveHint: true, idempotentHint: false },
+    },
+    async () => {
+      try {
+        const result = await del('/api/v1/shop/jobs/profile', opts)
+        return json(result)
+      } catch (e) {
+        return mapApiError(e, 'job_profile_delete')
+      }
+    },
+  )
+
+  // ─── haszno_shop_job_cv_get ───────────────────────────────────────────────
+
+  if (flags.remote) {
+    // Remote/hosted mode: cannot stream binary — return a notice.
+    server.registerTool(
+      'haszno_shop_job_cv_get',
+      {
+        title: 'Download own CV (remote mode)',
+        description:
+          'Remote MCP mode: the CV cannot be streamed as bytes through the hosted MCP endpoint. ' +
+          'To view or download your CV, open your profile page: https://haszno.com/shop/oneletrajzom. ' +
+          'CV content is personal data — do not share it with other services.',
+        annotations: { readOnlyHint: true, destructiveHint: false },
+      },
+      async () => {
+        return json({
+          notice:
+            'Remote MCP mode: az önéletrajz nem tölthető le bájtonként a hosted MCP végponton keresztül. ' +
+            'A PDF megtekintéséhez nyisd meg a profil oldalt: https://haszno.com/shop/oneletrajzom',
+        })
+      },
+    )
+  } else {
+    // Local/stdio mode: download the PDF and save it to savePath.
+    server.registerTool(
+      'haszno_shop_job_cv_get',
+      {
+        title: 'Download own CV to a local file',
+        description:
+          'Downloads the authenticated user\'s own CV PDF to a local file. ' +
+          'Provide savePath for the destination (e.g. /tmp/my-cv.pdf). ' +
+          'If savePath is omitted, the file is saved to the system temp directory. ' +
+          'Returns the saved file path and size. ' +
+          'CV content is personal data — do not paste it into other services or logs. ' +
+          'GET /api/v1/shop/jobs/profile/cv → PDF (binary).',
+        inputSchema: {
+          savePath: z.string().optional().describe('Absolute path where the PDF will be saved (e.g. /tmp/my-cv.pdf). Defaults to a temp file.'),
+        },
+        annotations: { readOnlyHint: true, destructiveHint: false },
+      },
+      async (args) => {
+        try {
+          const pdfBuffer = await getRawBinary('/api/v1/shop/jobs/profile/cv', opts)
+          const dest = (args.savePath as string | undefined) ?? path.join(os.tmpdir(), 'haszno-my-cv.pdf')
+          try {
+            fs.writeFileSync(dest, pdfBuffer)
+          } catch (e) {
+            return mkErr(`job_cv_get: Nem sikerült menteni a fájlt (${dest}): ${String(e)}`)
+          }
+          return json({ savedPath: dest, sizeBytes: pdfBuffer.length })
+        } catch (e) {
+          return mapApiError(e, 'job_cv_get')
+        }
+      },
+    )
+  }
+
   // ─── haszno_shop_job_cv_upload ────────────────────────────────────────────
 
   if (flags.remote) {
@@ -511,7 +597,7 @@ export function registerJobTools(
         const result = await post(`/api/v1/shop/ads/${args.adId}/applications`, body, opts)
         return json(result)
       } catch (e) {
-        return mapApplyError(e)
+        return mapApplyError(e, args.adId)
       }
     },
   )
