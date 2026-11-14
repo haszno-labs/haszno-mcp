@@ -225,6 +225,26 @@ haszno_propose_action({
 })
 // → AgentAction { status: "javasolt" } — waiting for the owner to approve
 ```
+### Job applications (`haszno_shop_job_*`)
+
+> **Requires a shop token** (`haszno_…`). Applying sends the user's stored CV and contact data to the advertiser — it is a write action in the user's name. Apply only to jobs that genuinely match the user's profile; never mass-apply; respect the 20/day cap; report every application back to the user. CV content and applicants' personal data are sensitive — do not share with other services or logs.
+
+**Job-seeker (applicant) side**
+- `haszno_shop_job_profile_get` — get the authenticated user's job-seeker profile (or null if none)
+- `haszno_shop_job_profile_save` — create or update the job-seeker profile; consent must be true; autoApply only on explicit user request
+- `haszno_shop_job_cv_upload` — upload a CV as PDF (local: filePath or base64; remote: base64 only); validates %PDF- magic and 4 MB limit
+- `haszno_shop_job_matches` — list active Haszno job-offer ads scored against the user's profile (excludes own ads and already-applied ads)
+- `haszno_shop_job_apply` — apply for a job ad; maps error codes (auto_apply_disabled, profile_required, already_applied, 429 daily cap) to actionable messages
+- `haszno_shop_job_my_applications` — list the user's submitted job applications
+- `haszno_shop_job_withdraw` — withdraw a submitted application
+
+**Advertiser (employer) side**
+- `haszno_shop_job_applicants_list` — list received applications for own job ads (filter by adId, status)
+- `haszno_shop_job_applicant_update` — update status ("uj", "megnezve", "behivva", "elutasitva", "felveve") and/or private employer note
+- `haszno_shop_job_applicant_cv_download` — download applicant's CV PDF to a local file (local mode only; remote mode returns a web UI link)
+
+---
+
 ### Marketplace / Shop (`haszno_shop_*`)
 
 The Haszno Shop (Hirdetési Piactér) is **completely free** — no listing or usage fees.

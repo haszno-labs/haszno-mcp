@@ -53,6 +53,7 @@ import { z } from 'zod'
 import type { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js'
 import { get, post, put, del, type HttpOptions, SHOP_TOKEN_PREFIX } from '../client/http.js'
 import { HasznoApiError } from '../client/error.js'
+import { registerJobTools } from './jobs.js'
 
 // ── Shared helpers ─────────────────────────────────────────────────────────────
 
@@ -1849,4 +1850,9 @@ export function registerShopTools(
       }
     },
   )
+
+  // ── Job tools — wired via jobs.ts ──────────────────────────────────────────
+  // The hosted MCP server only imports registerShopTools from lib.ts, so calling
+  // registerJobTools here ensures job tools are always included.
+  registerJobTools(server, opts, flags)
 }

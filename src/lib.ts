@@ -35,4 +35,5 @@
  *   zod                         ^4.0
  */
 export { registerShopTools } from './tools/shop.js'
+export { registerJobTools } from './tools/jobs.js'
 export type { HttpOptions } from './client/http.js'
