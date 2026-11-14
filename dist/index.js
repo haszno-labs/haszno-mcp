@@ -118,6 +118,17 @@ var ShopTokenNotSupportedError = class extends Error {
     this.operation = operation;
   }
 };
+var LegacyKeyNotSupportedError = class extends Error {
+  isLegacyKeyNotSupported = true;
+  operation;
+  constructor(operation) {
+    super(
+      `"${operation}" csak bolt API-tokennel (haszno_\u2026) \xE9rhet\u0151 el \u2014 a Napi jelent\xE9s \xE9s agent-eszk\xF6z\xF6k nem m\u0171k\xF6dnek sima API-kulccsal. Hozzon l\xE9tre bolt API-tokent itt: /app/api-kulcsok (Haszno webalkalmaz\xE1s). Shop token required: create one at /app/api-kulcsok in the Haszno web app.`
+    );
+    this.name = "LegacyKeyNotSupportedError";
+    this.operation = operation;
+  }
+};
 function detectShopToken(opts) {
   const key = opts.apiKey ?? process.env["HASZNO_API_TOKEN"] ?? process.env["HASZNO_API_KEY"] ?? process.env["ARFUTAR_API_KEY"];
   return isShopToken(key) ? key : void 0;
@@ -125,6 +136,11 @@ function detectShopToken(opts) {
 function notSupported(op) {
   return (..._args) => {
     return Promise.reject(new ShopTokenNotSupportedError(op));
+  };
+}
+function notSupportedLegacy(op) {
+  return (..._args) => {
+    return Promise.reject(new LegacyKeyNotSupportedError(op));
   };
 }
 function createClient(opts = {}) {
@@ -234,6 +250,21 @@ function createShopTokenClient(opts) {
     blog: {
       list: notSupported("blog.list"),
       get: notSupported("blog.get")
+    },
+    manager: {
+      listReports: () => get("/api/daily-reports", o),
+      getReport: (day) => day === "latest" ? get("/api/agent/daily-report", o) : get(`/api/agent/daily-report/${day}`, o),
+      getResearchBrief: () => get("/api/agent/research-brief", o),
+      postFindings: (day, body) => post(`/api/agent/daily-report/${day}/findings`, body, o),
+      listActions: (params) => {
+        const qs = new URLSearchParams();
+        if (params?.status) qs.set("status", params.status);
+        if (params?.limit != null) qs.set("limit", String(params.limit));
+        const suffix = qs.toString() ? `?${qs.toString()}` : "";
+        return get(`/api/agent/actions${suffix}`, o);
+      },
+      proposeAction: (body) => post("/api/agent/actions", body, o),
+      rejectAction: (id) => post(`/api/agent/actions/${id}/reject`, null, o)
     }
   };
 }
@@ -384,6 +415,18 @@ function createLegacyClient(opts) {
         return get(`/api/blog${suffix}`, o);
       },
       get: (slug) => get(`/api/blog/${slug}`, o)
+    },
+    // manager.* requires a shop token (haszno_…). In legacy mode these endpoints
+    // either return synthetic demo data (GET /api/agent/actions → HTTP 200 with
+    // fake rows) or 401. Both outcomes are wrong for a production agent.
+    manager: {
+      listReports: notSupportedLegacy("manager.listReports"),
+      getReport: notSupportedLegacy("manager.getReport"),
+      getResearchBrief: notSupportedLegacy("manager.getResearchBrief"),
+      postFindings: notSupportedLegacy("manager.postFindings"),
+      listActions: notSupportedLegacy("manager.listActions"),
+      proposeAction: notSupportedLegacy("manager.proposeAction"),
+      rejectAction: notSupportedLegacy("manager.rejectAction")
     }
   };
 }
@@ -2164,9 +2207,261 @@ function registerBlogTools(server, client) {
   );
 }
 
+// src/tools/manager.ts
+import { z as z12 } from "zod";
+var DAY_REGEX = /^\d{4}-\d{2}-\d{2}$/;
+function isValidDay(day) {
+  if (!DAY_REGEX.test(day)) return false;
+  const d = new Date(day);
+  return !isNaN(d.getTime());
+}
+function isHttpUrl(url) {
+  try {
+    const u = new URL(url);
+    return u.protocol === "http:" || u.protocol === "https:";
+  } catch {
+    return false;
+  }
+}
+var FindingInputSchema = z12.object({
+  kind: z12.enum(["ar_emelkedes", "ar_csokkenes", "trend", "hir", "keszlet", "top_eladas", "lehetoseg"]).describe(
+    "Az elem fajt\xE1ja: ar_emelkedes (\xE1r emelked\xE9s), ar_csokkenes (\xE1r cs\xF6kkenes), trend, hir (piaci h\xEDr), keszlet (k\xE9szlethi\xE1ny), top_eladas, lehetoseg"
+  ),
+  title: z12.string().min(5).max(140).describe("R\xF6vid c\xEDm (5\u2013140 karakter)"),
+  body: z12.string().min(10).max(1200).describe("R\xE9szletes sz\xF6veg (10\u20131200 karakter); plain text, nem HTML"),
+  changePct: z12.number().nullable().optional().describe("Sz\xE1zal\xE9kos v\xE1ltoz\xE1s (pl. 12.5 = +12,5 %; negat\xEDv = cs\xF6kkenes)"),
+  keyword: z12.string().nullable().optional().describe("Kapcsol\xF3d\xF3 term\xE9k/kulcssz\xF3 (opcion\xE1lis)"),
+  productId: z12.number().int().positive().nullable().optional().describe("A bolt term\xE9kazonos\xEDt\xF3ja, ha az elem egy konkr\xE9t term\xE9kre vonatkozik"),
+  sourceName: z12.string().nullable().optional().describe('Forr\xE1s neve (pl. "Reuters", "PS Blog"; opcion\xE1lis)'),
+  sourceUrl: z12.string().nullable().optional().describe("Forr\xE1s URL \u2014 csak http(s) enged\xE9lyezett; opcion\xE1lis"),
+  suggestedAction: z12.union([
+    z12.object({ type: z12.literal("felvetel"), productId: z12.number().int().positive() }),
+    z12.object({ type: z12.literal("levetel"), productId: z12.number().int().positive() }),
+    z12.object({
+      type: z12.literal("ar"),
+      productId: z12.number().int().positive(),
+      priceGross: z12.number().int().positive().describe("eg\xE9sz sz\xE1m (Ft)")
+    }),
+    z12.object({ type: z12.literal("import"), networkProductId: z12.number().int().positive() })
+  ]).nullable().optional().describe(
+    "Javasolt egykattint\xE1sos m\u0171velet (opcion\xE1lis). A j\xF3v\xE1hagy\xE1s a bolt tulajdonos\xE1\xE9 a Haszno fel\xFClet\xE9n."
+  )
+});
+function registerManagerTools(server, client) {
+  server.registerTool(
+    "haszno_daily_report",
+    {
+      title: "Napi piaci jelent\xE9s lek\xE9r\xE9se",
+      description: 'Visszaadja a bolt napi piaci jelent\xE9s\xE9t. Ha `day` nincs megadva (vagy "latest"), a legut\xF3bbi el\xE9rhet\u0151 nap jelent\xE9se j\xF6n. Ha a list\xE1t k\xE9red (list: true), az utols\xF3 30 nap \xF6sszefoglal\xF3it adja vissza. A jelent\xE9s tartalmaz rendszerb\u0151l gener\xE1lt elemeket (\xE1rv\xE1ltoz\xE1sok, trendel\u0151k, k\xE9szlethi\xE1nyok, top elad\xE1sok, lehet\u0151s\xE9gek) \xE9s agent \xE1ltal bek\xFCld\xF6tt kutat\xE1si eredm\xE9nyeket. Visszat\xE9r: DailyReport (vagy DailyReportSummary[], ha list=true).\n\nMez\u0151k \u2014 DailyReport: { id, day, headline, summary, items[] }.\nMez\u0151k \u2014 ReportItem: { id, origin ("rendszer"|"agent"), kind, title, body, changePct, keyword, productId, productName, sourceName, sourceUrl, suggestedAction, action }.\n\nAz \u201Eaction" mez\u0151 mutatja, ha az elemb\u0151l m\xE1r javaslat keletkezett.\nA j\xF3v\xE1hagy\xE1s \xE9s a visszavon\xE1s a bolt tulajdonos\xE1\xE9 a Haszno fel\xFClet\xE9n.',
+      inputSchema: {
+        day: z12.string().optional().describe(
+          'YYYY-MM-DD form\xE1tum\xFA d\xE1tum, "latest", vagy \xFCresen hagyva = legut\xF3bbi. Ha list=true, ez a param\xE9ter nem \xE9rv\xE9nyes.'
+        ),
+        list: z12.boolean().optional().describe(
+          "true \u2192 az utols\xF3 30 nap r\xF6vid \xF6sszefoglal\xF3it adja vissza (DailyReportSummary[]); false/\xFCresen = teljes napi jelent\xE9s."
+        )
+      },
+      annotations: { readOnlyHint: true }
+    },
+    async (args) => {
+      if (args.list) {
+        const reports = await client.manager.listReports();
+        return { content: [{ type: "text", text: JSON.stringify({ reports }) }] };
+      }
+      const day = args.day ?? "latest";
+      if (day !== "latest" && !isValidDay(day)) {
+        return {
+          content: [{
+            type: "text",
+            text: JSON.stringify({ error: `\xC9rv\xE9nytelen d\xE1tum form\xE1tum: "${day}". Haszn\xE1lj YYYY-MM-DD-t.` })
+          }]
+        };
+      }
+      const report = await client.manager.getReport(day);
+      if (report === null) {
+        return {
+          content: [{
+            type: "text",
+            text: JSON.stringify({ report: null, message: "Ehhez a naphoz m\xE9g nem k\xE9sz\xFClt jelent\xE9s." })
+          }]
+        };
+      }
+      return { content: [{ type: "text", text: JSON.stringify({ report }) }] };
+    }
+  );
+  server.registerTool(
+    "haszno_research_brief",
+    {
+      title: "Kutat\xE1si brief lek\xE9r\xE9se",
+      description: "Visszaadja a mai napra vonatkoz\xF3 kutat\xE1si briefet, amit az AI \xFCgyn\xF6k felhaszn\xE1l a napi piaci kutat\xE1shoz. A brief tartalmazza: a bolt aktu\xE1lis f\xF3kuszkeyword-jeit \xE9s term\xE9keit \xE1rral \xE9s trend-jelz\u0151kkel, Magyar nyelv\u0171 kutat\xE1si k\xE9rd\xE9seket, \xE9s azt az URL-t, ahov\xE1 a kutat\xE1si eredm\xE9nyeket be kell k\xFCldeni (postTo).\n\nWorkflow: (1) h\xEDvd meg ezt az eszk\xF6zt a brief lek\xE9r\xE9s\xE9hez, (2) v\xE9gezz piaci kutat\xE1st a shopFocus \xE9s questions alapj\xE1n, (3) k\xFCldd be az eredm\xE9nyeket a haszno_post_findings eszk\xF6zzel a postTo URL napj\xE1ra.\n\nVisszat\xE9r: ResearchBrief { day, shopFocus[], questions[], postTo }.",
+      inputSchema: {},
+      annotations: { readOnlyHint: true }
+    },
+    async () => {
+      const brief = await client.manager.getResearchBrief();
+      return { content: [{ type: "text", text: JSON.stringify(brief) }] };
+    }
+  );
+  server.registerTool(
+    "haszno_post_findings",
+    {
+      title: "Kutat\xE1si eredm\xE9nyek bek\xFCld\xE9se",
+      description: "Az AI \xFCgyn\xF6k ezzel az eszk\xF6zzel adja hozz\xE1 a napi piaci kutat\xE1s eredm\xE9nyeit a jelent\xE9shez. Az elemek origin='agent'-k\xE9nt ker\xFClnek a napi jelent\xE9sbe, \xE9s a bolt tulajdonosa l\xE1tja \u0151ket.\n\nA `day` csak a mai vagy a tegnapi nap (UTC) lehet.\nEgyszerre legfeljebb 20 elem k\xFCldhet\u0151 be; naponta \xF6sszesen max. 60 agent-elem enged\xE9lyezett egy napon.\n\nMez\u0151k valid\xE1l\xE1sa:\n- title: 5\u2013140 karakter\n- body: 10\u20131200 karakter (plain text, nem HTML)\n- sourceUrl: csak http(s) enged\xE9lyezett\n- suggestedAction: felvetel/levetel/ar/import \u2014 a j\xF3v\xE1hagy\xE1s mindig a bolt tulajdonos\xE1\xE9 a Haszno fel\xFClet\xE9n\n\nVisszat\xE9r: a friss\xEDtett DailyReport.",
+      inputSchema: {
+        day: z12.string().describe("A nap YYYY-MM-DD form\xE1tumban. Csak mai vagy tegnapi nap (UTC) fogadhat\xF3 el."),
+        headline: z12.string().max(140).optional().describe("A nap r\xF6vid \xF6sszefoglal\xF3ja (opcion\xE1lis, max. 140 karakter)"),
+        summary: z12.string().max(800).optional().describe("Hosszabb \xF6sszefoglal\xF3 sz\xF6veg (opcion\xE1lis, max. 800 karakter)"),
+        items: z12.array(FindingInputSchema).min(1).max(20).describe("A kutat\xE1si eredm\xE9nyek list\xE1ja (1\u201320 elem)")
+      },
+      annotations: { readOnlyHint: false, destructiveHint: false, idempotentHint: false }
+    },
+    async (args) => {
+      if (!isValidDay(args.day)) {
+        return {
+          content: [{
+            type: "text",
+            text: JSON.stringify({
+              error: `\xC9rv\xE9nytelen d\xE1tum form\xE1tum: "${args.day}". Haszn\xE1lj YYYY-MM-DD-t.`
+            })
+          }]
+        };
+      }
+      for (const item of args.items) {
+        if (item.sourceUrl && !isHttpUrl(item.sourceUrl)) {
+          return {
+            content: [{
+              type: "text",
+              text: JSON.stringify({
+                error: `\xC9rv\xE9nytelen sourceUrl: "${item.sourceUrl}". Csak http(s) enged\xE9lyezett.`
+              })
+            }]
+          };
+        }
+      }
+      const body = {
+        ...args.headline != null ? { headline: args.headline } : {},
+        ...args.summary != null ? { summary: args.summary } : {},
+        items: args.items
+      };
+      const report = await client.manager.postFindings(args.day, body);
+      return { content: [{ type: "text", text: JSON.stringify({ report }) }] };
+    }
+  );
+  server.registerTool(
+    "haszno_list_actions",
+    {
+      title: "Agent-m\u0171veletek list\xE1z\xE1sa",
+      description: "Visszaadja a bolt agent-m\u0171veleteinek list\xE1j\xE1t (javasolt, v\xE9grehajtott, visszavont, hiba st\xE1tuszban l\xE9v\u0151k). Sz\u0171rhet\u0151 st\xE1tusz szerint; alap\xE9rtelmezett limit: 50, maximum: 200.\n\nVisszat\xE9r: AgentAction[] (leg\xFAjabbt\xF3l a legr\xE9gebbi fel\xE9).\n\nMez\u0151k \u2014 AgentAction: { id, action, reason, status, origin, autoApproved, reportItemId, target { name, sku, imageUrl }, preview { oldPriceGross, newPriceGross, floorGross, marginPct }, error, canUndo, createdAt, decidedAt, executedAt }.\n\nSt\xE1tuszok: javasolt | vegrehajtva | elutasitva | hiba | visszavonva.\nA j\xF3v\xE1hagy\xE1s \xE9s a visszavon\xE1s a bolt tulajdonos\xE1\xE9 a Haszno fel\xFClet\xE9n.",
+      inputSchema: {
+        status: z12.enum(["javasolt", "vegrehajtva", "elutasitva", "hiba", "visszavonva"]).optional().describe("Sz\u0171r\xE9s st\xE1tusz szerint (opcion\xE1lis; \xFCresen = minden st\xE1tusz)"),
+        limit: z12.number().int().min(1).max(200).optional().describe("Visszaadott elemek sz\xE1ma (alap\xE9rtelmezett: 50, max: 200)")
+      },
+      annotations: { readOnlyHint: true }
+    },
+    async (args) => {
+      const actions = await client.manager.listActions({
+        status: args.status,
+        limit: args.limit
+      });
+      return {
+        content: [{
+          type: "text",
+          text: JSON.stringify({ actions, count: actions.length })
+        }]
+      };
+    }
+  );
+  server.registerTool(
+    "haszno_propose_action",
+    {
+      title: "Agent-m\u0171velet javaslata",
+      description: 'Az AI \xFCgyn\xF6k ezzel az eszk\xF6zzel javasol egy m\u0171veletet a bolt tulajdonos\xE1nak. A javasolt m\u0171velet NEM hajt\xF3dik v\xE9gre azonnal \u2014 a bolt tulajdonos\xE1 er\u0151s\xEDti meg vagy utas\xEDtja el a Haszno fel\xFClet\xE9n.\n\nKiv\xE9tel: ha az autopilot be van kapcsolva \xE9s a m\u0171velet t\xEDpusa enged\xE9lyezett az automatikus v\xE9grehajt\xE1shoz, a szerver esetleg azonnal v\xE9grehajtja \u2014 ez a Haszno autopilot be\xE1ll\xEDt\xE1sait\xF3l f\xFCgg, nem az \xFCgyn\xF6k d\xF6nt\xE9se.\n\nM\u0171velett\xEDpusok:\n- felvetel: katal\xF3gusterm\xE9k felt\xFCntet\xE9se a boltban\n- levetel: term\xE9k lev\xE9tele a boltb\xF3l\n- ar: term\xE9k \xE1r\xE1nak m\xF3dos\xEDt\xE1sa (az abszol\xFAt \xE1r-padl\xF3t a szerver ellen\u0151rzi;   ismeretlen beker\xFCl\xE9si \xE1r\xFA term\xE9k nem \xE1razhat\xF3 \xFAjra agenttel)\n- import: h\xE1l\xF3zati term\xE9k importlist\xE1ra t\xE9tele\n\nVisszat\xE9r: AgentAction (status: "javasolt" vagy esetleg "vegrehajtva" ha az autopilot azonnal futtatta).\n\nFONTOS: a j\xF3v\xE1hagy\xE1s a bolt tulajdonos\xE1\xE9 a Haszno fel\xFClet\xE9n. Az \xFCgyn\xF6k nem hagyhat j\xF3v\xE1 saj\xE1t maga \xE1ltal javasolt m\u0171veletet.',
+      inputSchema: {
+        type: z12.enum(["felvetel", "levetel", "ar", "import"]).describe("M\u0171velett\xEDpus"),
+        productId: z12.number().int().positive().optional().describe(
+          "A bolt term\xE9kazonos\xEDt\xF3ja (k\xF6telez\u0151: felvetel, levetel, ar t\xEDpusokn\xE1l)"
+        ),
+        networkProductId: z12.number().int().positive().optional().describe("H\xE1l\xF3zati term\xE9kazonos\xEDt\xF3 (k\xF6telez\u0151: import t\xEDpusn\xE1l)"),
+        priceGross: z12.number().int().positive().optional().describe(
+          "Javasolt brutt\xF3 \xE1r eg\xE9sz sz\xE1m (Ft), k\xF6telez\u0151 ar t\xEDpusn\xE1l. A szerver ellen\u0151rzi, hogy >= az abszol\xFAt \xE1r-padl\xF3nak."
+        ),
+        reason: z12.string().min(5).max(500).describe("Mi\xE9rt javasolja az \xFCgyn\xF6k ezt a m\u0171veletet? (5\u2013500 karakter)"),
+        reportItemId: z12.number().int().positive().optional().describe("Ha a javaslat egy napi jelent\xE9s elem\xE9b\u0151l ered, az elem azonos\xEDt\xF3ja")
+      },
+      annotations: { readOnlyHint: false, destructiveHint: false, idempotentHint: false }
+    },
+    async (args) => {
+      let actionInput;
+      if (args.type === "felvetel") {
+        if (args.productId == null) {
+          return {
+            content: [{
+              type: "text",
+              text: JSON.stringify({ error: "felvetel t\xEDpushoz productId k\xF6telez\u0151." })
+            }]
+          };
+        }
+        actionInput = { type: "felvetel", productId: args.productId };
+      } else if (args.type === "levetel") {
+        if (args.productId == null) {
+          return {
+            content: [{
+              type: "text",
+              text: JSON.stringify({ error: "levetel t\xEDpushoz productId k\xF6telez\u0151." })
+            }]
+          };
+        }
+        actionInput = { type: "levetel", productId: args.productId };
+      } else if (args.type === "ar") {
+        if (args.productId == null || args.priceGross == null) {
+          return {
+            content: [{
+              type: "text",
+              text: JSON.stringify({ error: "ar t\xEDpushoz productId \xE9s priceGross k\xF6telez\u0151." })
+            }]
+          };
+        }
+        actionInput = { type: "ar", productId: args.productId, priceGross: args.priceGross };
+      } else {
+        if (args.networkProductId == null) {
+          return {
+            content: [{
+              type: "text",
+              text: JSON.stringify({ error: "import t\xEDpushoz networkProductId k\xF6telez\u0151." })
+            }]
+          };
+        }
+        actionInput = { type: "import", networkProductId: args.networkProductId };
+      }
+      const body = {
+        ...actionInput,
+        reason: args.reason,
+        ...args.reportItemId != null ? { reportItemId: args.reportItemId } : {}
+      };
+      const action = await client.manager.proposeAction(body);
+      return { content: [{ type: "text", text: JSON.stringify({ action }) }] };
+    }
+  );
+  server.registerTool(
+    "haszno_withdraw_action",
+    {
+      title: "Agent-javaslat visszavon\xE1sa",
+      description: 'Az AI \xFCgyn\xF6k ezzel az eszk\xF6zzel vonja vissza a saj\xE1t maga \xE1ltal javasolt, m\xE9g j\xF3v\xE1 nem hagyott m\u0171veletet. Csak "javasolt" st\xE1tusz\xFA, az \xFCgyn\xF6k \xE1ltal l\xE9trehozott m\u0171veleten m\u0171k\xF6dik.\n\nFONTOS: a j\xF3v\xE1hagy\xE1s \xE9s az emberi d\xF6nt\xE9s a bolt tulajdonos\xE1\xE9 a Haszno fel\xFClet\xE9n \u2014 ez az eszk\xF6z kiz\xE1r\xF3lag az \xFCgyn\xF6k saj\xE1t javaslatainak visszavon\xE1s\xE1ra szolg\xE1l (pl. ha a javaslat elavult vagy hib\xE1s volt).\n\nVisszat\xE9r: a friss\xEDtett AgentAction (status: "visszavonva").',
+      inputSchema: {
+        id: z12.number().int().positive().describe("A visszavonand\xF3 agent-javaslat azonos\xEDt\xF3ja")
+      },
+      annotations: { readOnlyHint: false, destructiveHint: false, idempotentHint: false }
+    },
+    async (args) => {
+      const action = await client.manager.rejectAction(args.id);
+      return { content: [{ type: "text", text: JSON.stringify({ action }) }] };
+    }
+  );
+}
+
 // src/tools/shop.ts
 import * as fs2 from "fs";
-import { z as z12 } from "zod";
+import { z as z13 } from "zod";
 function json2(value) {
   return { content: [{ type: "text", text: JSON.stringify(value, null, 2) }] };
 }
@@ -2261,16 +2556,16 @@ function registerShopTools(server, opts, flags = {}) {
       title: "Search public ads",
       description: 'Searches the public Haszno Hirdet\xE9si Piact\xE9r (marketplace) for second-hand ads. Returns a paginated list of ads including their id, title, priceGross (HUF), status, images, and a "reserved" flag (true when an accepted reservation exists for the ad). The Shop is free \u2014 no fees for browsing or contacting sellers. Filter by category with cat (category key string from haszno_shop_list_categories), full-text search with q, price range with min/max (HUF). Sort: "uj" (newest, default), "ar_nov" (price ascending), "ar_csokk" (price descending).',
       inputSchema: {
-        q: z12.string().optional().describe("Full-text search query"),
-        cat: z12.string().optional().describe('Filter by category key (e.g. "auto", "elektronika")'),
-        sub: z12.string().optional().describe('Filter by subcategory key (e.g. "szemelyauto")'),
-        min: z12.number().int().min(0).optional().describe("Minimum price in HUF gross"),
-        max: z12.number().int().min(0).optional().describe("Maximum price in HUF gross"),
-        county: z12.string().optional().describe("Filter by county name (from taxonomy counties list)"),
-        city: z12.string().optional().describe("Filter by city name"),
-        cond: z12.enum(["uj", "ujszeru", "hasznalt", "serult"]).optional().describe("Product condition filter"),
-        sort: z12.enum(["uj", "ar_nov", "ar_csokk"]).optional().describe('"uj" (newest), "ar_nov" (price asc), "ar_csokk" (price desc)'),
-        page: z12.number().int().min(1).optional().describe("Page number (default 1, page size 24)")
+        q: z13.string().optional().describe("Full-text search query"),
+        cat: z13.string().optional().describe('Filter by category key (e.g. "auto", "elektronika")'),
+        sub: z13.string().optional().describe('Filter by subcategory key (e.g. "szemelyauto")'),
+        min: z13.number().int().min(0).optional().describe("Minimum price in HUF gross"),
+        max: z13.number().int().min(0).optional().describe("Maximum price in HUF gross"),
+        county: z13.string().optional().describe("Filter by county name (from taxonomy counties list)"),
+        city: z13.string().optional().describe("Filter by city name"),
+        cond: z13.enum(["uj", "ujszeru", "hasznalt", "serult"]).optional().describe("Product condition filter"),
+        sort: z13.enum(["uj", "ar_nov", "ar_csokk"]).optional().describe('"uj" (newest), "ar_nov" (price asc), "ar_csokk" (price desc)'),
+        page: z13.number().int().min(1).optional().describe("Page number (default 1, page size 24)")
       },
       annotations: { readOnlyHint: true, destructiveHint: false }
     },
@@ -2301,7 +2596,7 @@ function registerShopTools(server, opts, flags = {}) {
       title: "Get a single ad",
       description: 'Fetches the full detail of a Haszno marketplace ad by its ID. Returns all fields including images, attributes (attrs), seller info, and the "reserved" flag (true when an accepted reservation exists). The Shop is free \u2014 browsing and contacting sellers costs nothing.',
       inputSchema: {
-        id: z12.number().int().min(1).describe("Ad ID")
+        id: z13.number().int().min(1).describe("Ad ID")
       },
       annotations: { readOnlyHint: true, destructiveHint: false }
     },
@@ -2320,9 +2615,9 @@ function registerShopTools(server, opts, flags = {}) {
       title: "Get a suggested price hint",
       description: "Returns a suggested asking price range (p25\u2013p75 percentile) for a category, based on at least 5 distinct sellers' active listings. Returns null when there is not enough data. Use this before calling haszno_shop_create_ad to set a realistic priceGross. Pass cat (category key from haszno_shop_list_categories) and optionally sub (subcategory key).",
       inputSchema: {
-        cat: z12.string().describe('Category key (e.g. "auto", "elektronika") from haszno_shop_list_categories'),
-        sub: z12.string().optional().describe("Subcategory key to narrow the hint"),
-        q: z12.string().optional().describe("Item description or keywords (accepted but ignored by the server)")
+        cat: z13.string().describe('Category key (e.g. "auto", "elektronika") from haszno_shop_list_categories'),
+        sub: z13.string().optional().describe("Subcategory key to narrow the hint"),
+        q: z13.string().optional().describe("Item description or keywords (accepted but ignored by the server)")
       },
       annotations: { readOnlyHint: true, destructiveHint: false }
     },
@@ -2361,9 +2656,9 @@ function registerShopTools(server, opts, flags = {}) {
       title: "List inquiries on my ads",
       description: "Returns messages/questions sent to your ads by potential buyers. Optionally filter by adId to see inquiries for a specific ad. Pagination: use limit (1\u2013200, default 50) and offset (default 0). Requires authentication.",
       inputSchema: {
-        adId: z12.number().int().min(1).optional().describe("Filter by a specific ad ID"),
-        limit: z12.number().int().min(1).max(200).optional().describe("Page size (default 50, max 200)"),
-        offset: z12.number().int().min(0).optional().describe("Skip this many items (default 0)")
+        adId: z13.number().int().min(1).optional().describe("Filter by a specific ad ID"),
+        limit: z13.number().int().min(1).max(200).optional().describe("Page size (default 50, max 200)"),
+        offset: z13.number().int().min(0).optional().describe("Skip this many items (default 0)")
       },
       annotations: { readOnlyHint: true, destructiveHint: false }
     },
@@ -2403,9 +2698,9 @@ function registerShopTools(server, opts, flags = {}) {
       title: "List my reservations",
       description: `Returns reservations for the authenticated user. Use role="buyer" (default) to list reservations YOU placed on other people's ads. Use role="seller" to list reservations buyers placed on YOUR ads. Status values: "fuggoben" (pending), "elfogadva" (accepted), "elutasitva" (declined/auto-declined), "visszavonva" (cancelled by buyer), "teljesitve" (completed), "lejart" (hold expired). Contact fields (phone, email) are only filled in when status is "elfogadva" or "teljesitve". Price negotiation fields: offerPriceGross (buyer's last offer), counterPriceGross (seller's active counter-offer, null when none), agreedPriceGross (the mutually agreed price set at acceptance). After a reservation is "teljesitve", both parties can leave a review with haszno_shop_review. Reserving is not paying \u2014 payment and handover happen directly between buyer and seller.`,
       inputSchema: {
-        role: z12.enum(["buyer", "seller"]).optional().describe('Whose perspective: "buyer" (default) or "seller"'),
-        status: z12.string().optional().describe("Filter by reservation status"),
-        page: z12.number().int().min(1).optional().describe("Page number (default 1)")
+        role: z13.enum(["buyer", "seller"]).optional().describe('Whose perspective: "buyer" (default) or "seller"'),
+        status: z13.string().optional().describe("Filter by reservation status"),
+        page: z13.number().int().min(1).optional().describe("Page number (default 1)")
       },
       annotations: { readOnlyHint: true, destructiveHint: false }
     },
@@ -2469,10 +2764,10 @@ function registerShopTools(server, opts, flags = {}) {
         title: "Upload an ad image (remote mode \u2014 base64 only)",
         description: `Uploads an image for use in a Haszno marketplace ad. Remote MCP mode: only base64-encoded image data is accepted \u2014 filePath is not available because the server cannot access the client's local filesystem. Provide base64-encoded image data together with its MIME type. Returns an object with "id" (numeric image ID) and "url" (path like /api/shop/images/<id>). \u2014 Pass url in the "images" array of haszno_shop_create_ad or haszno_shop_update_ad. \u2014 Pass id in the "imageIds" array of haszno_shop_suggest_from_photos. Supported MIME types: image/jpeg, image/png, image/webp. Maximum size: 700 KB.`,
         inputSchema: {
-          base64: z12.string().describe(
+          base64: z13.string().describe(
             "Base64-encoded image data (without the data: URI prefix)."
           ),
-          mimeType: z12.string().describe(
+          mimeType: z13.string().describe(
             "MIME type: image/jpeg, image/png, or image/webp."
           )
         },
@@ -2489,13 +2784,13 @@ function registerShopTools(server, opts, flags = {}) {
         title: "Upload an ad image",
         description: 'Uploads an image for use in a Haszno marketplace ad. Provide either an absolute local file path ("filePath") OR a base64-encoded image with its MIME type ("base64" + "mimeType"). Returns an object with "id" (numeric image ID) and "url" (path like /api/shop/images/<id>). \u2014 Pass url in the "images" array of haszno_shop_create_ad or haszno_shop_update_ad. \u2014 Pass id in the "imageIds" array of haszno_shop_suggest_from_photos. Supported MIME types: image/jpeg, image/png, image/webp. Maximum size: 700 KB. The Haszno Shop is free \u2014 no fees for uploading images.',
         inputSchema: {
-          filePath: z12.string().optional().describe(
+          filePath: z13.string().optional().describe(
             "Absolute path to a local image file (e.g. /home/user/photo.jpg). Provide this OR base64/mimeType."
           ),
-          base64: z12.string().optional().describe(
+          base64: z13.string().optional().describe(
             "Base64-encoded image data (without the data: URI prefix). Provide together with mimeType."
           ),
-          mimeType: z12.string().optional().describe(
+          mimeType: z13.string().optional().describe(
             "MIME type for base64 input: image/jpeg, image/png, or image/webp."
           )
         },
@@ -2555,7 +2850,7 @@ function registerShopTools(server, opts, flags = {}) {
       title: "AI pre-fill ad from uploaded photos",
       description: 'Sends uploaded image IDs to the Haszno AI to generate a suggested ad title, description, category, condition, and category-specific attributes. Upload images first with haszno_shop_upload_image to get the numeric "id" of each image, then pass those IDs here (1\u20133 images). The result is a suggestion only \u2014 review it before passing it to haszno_shop_create_ad. Returns error 503 when the AI feature is not enabled on this server.',
       inputSchema: {
-        imageIds: z12.array(z12.number().int().min(1)).min(1).max(3).describe(
+        imageIds: z13.array(z13.number().int().min(1)).min(1).max(3).describe(
           "Numeric image IDs from haszno_shop_upload_image (1\u20133 IDs)"
         )
       },
@@ -2576,33 +2871,33 @@ function registerShopTools(server, opts, flags = {}) {
       title: "Post a new marketplace ad",
       description: 'Creates a new Haszno Hirdet\xE9si Piact\xE9r (marketplace) ad. This is a REAL action \u2014 the ad becomes immediately visible to all users on haszno.com. Only call this when the user has explicitly confirmed they want to post the ad. The Haszno Shop is completely free \u2014 there are no listing fees. Before calling this tool: (1) call haszno_shop_list_categories to get the category key, subcategory key, required attrs, and valid county names; (2) call haszno_shop_upload_image for each photo and collect the returned "url" values; (3) call haszno_shop_price_hint for a price suggestion. Image URLs must be in the format /api/shop/images/<id> (returned by haszno_shop_upload_image). This tool validates required category attributes before sending.',
       inputSchema: {
-        category: z12.string().describe('Category key (e.g. "auto") from haszno_shop_list_categories'),
-        subcategory: z12.string().optional().nullable().describe('Subcategory key (optional, e.g. "szemelya" for "auto")'),
-        title: z12.string().min(5).max(120).describe("Ad title (5\u2013120 characters)"),
-        description: z12.string().max(5e3).describe("Ad description (max 5000 chars)"),
-        priceGross: z12.number().int().min(1).max(2e9).nullable().describe('Asking price in HUF gross, or null for "price on request"'),
-        negotiable: z12.boolean().describe("Whether the price is negotiable"),
-        condition: z12.enum(["uj", "ujszeru", "hasznalt", "serult"]).describe(
+        category: z13.string().describe('Category key (e.g. "auto") from haszno_shop_list_categories'),
+        subcategory: z13.string().optional().nullable().describe('Subcategory key (optional, e.g. "szemelya" for "auto")'),
+        title: z13.string().min(5).max(120).describe("Ad title (5\u2013120 characters)"),
+        description: z13.string().max(5e3).describe("Ad description (max 5000 chars)"),
+        priceGross: z13.number().int().min(1).max(2e9).nullable().describe('Asking price in HUF gross, or null for "price on request"'),
+        negotiable: z13.boolean().describe("Whether the price is negotiable"),
+        condition: z13.enum(["uj", "ujszeru", "hasznalt", "serult"]).describe(
           'Product condition: "uj" (new), "ujszeru" (like new), "hasznalt" (used), "serult" (damaged)'
         ),
-        defects: z12.string().min(10).max(2e3).optional().nullable().describe(
+        defects: z13.string().min(10).max(2e3).optional().nullable().describe(
           'Description of defects or damage (minimum 10 characters). REQUIRED when condition is "hasznalt" (used) or "serult" (damaged) \u2014 the API will return HTTP 422 if this field is missing for those conditions.'
         ),
-        county: z12.string().describe("Hungarian county name from haszno_shop_list_categories counties list"),
-        city: z12.string().min(1).max(80).describe("City name"),
-        images: z12.array(z12.string()).max(10).optional().describe(
+        county: z13.string().describe("Hungarian county name from haszno_shop_list_categories counties list"),
+        city: z13.string().min(1).max(80).describe("City name"),
+        images: z13.array(z13.string()).max(10).optional().describe(
           "Image URLs from haszno_shop_upload_image (format: /api/shop/images/<id>, max 10)"
         ),
-        attrs: z12.record(z12.string(), z12.union([z12.string(), z12.number(), z12.boolean()])).optional().describe(
+        attrs: z13.record(z13.string(), z13.union([z13.string(), z13.number(), z13.boolean()])).optional().describe(
           'Category-specific attributes (e.g. { "allapot": "hasznalt", "marka": "Samsung" }). Required attributes depend on the category \u2014 call haszno_shop_list_categories to see them.'
         ),
-        contactName: z12.string().min(1).max(80).describe("Seller contact name"),
-        contactPhone: z12.string().optional().nullable().describe("Contact phone number (optional)"),
-        contactEmail: z12.string().email().describe("Seller contact e-mail address"),
-        showPhone: z12.boolean().describe("Whether to display the phone number publicly"),
-        resellable: z12.boolean().describe("Allow partner shops to list this ad in their own webshops"),
-        partnerCommissionPct: z12.number().min(0).max(30).describe("Commission % to offer partner shops (0\u201330)"),
-        confirm: z12.literal(true).describe(
+        contactName: z13.string().min(1).max(80).describe("Seller contact name"),
+        contactPhone: z13.string().optional().nullable().describe("Contact phone number (optional)"),
+        contactEmail: z13.string().email().describe("Seller contact e-mail address"),
+        showPhone: z13.boolean().describe("Whether to display the phone number publicly"),
+        resellable: z13.boolean().describe("Allow partner shops to list this ad in their own webshops"),
+        partnerCommissionPct: z13.number().min(0).max(30).describe("Commission % to offer partner shops (0\u201330)"),
+        confirm: z13.literal(true).describe(
           "Must be exactly true. This posts a real, public ad \u2014 only set this after the user confirms."
         )
       },
@@ -2648,24 +2943,24 @@ function registerShopTools(server, opts, flags = {}) {
       title: "Update an existing ad",
       description: "Updates an existing Haszno marketplace ad (PUT \u2014 the server replaces the full ad). This tool first fetches the current ad values, merges in only the fields you provide, then sends the complete updated body. Only pass the fields you want to change. The ad must belong to the authenticated user. Image URLs must be in the format /api/shop/images/<id>. The Haszno Shop is free.",
       inputSchema: {
-        id: z12.number().int().min(1).describe("Ad ID to update"),
-        category: z12.string().optional().describe("Category key"),
-        subcategory: z12.string().optional().nullable(),
-        title: z12.string().min(5).max(120).optional(),
-        description: z12.string().max(5e3).optional(),
-        priceGross: z12.number().int().min(1).max(2e9).nullable().optional().describe('New asking price in HUF gross, or null for "price on request"'),
-        negotiable: z12.boolean().optional(),
-        condition: z12.enum(["uj", "ujszeru", "hasznalt", "serult"]).optional(),
-        county: z12.string().optional(),
-        city: z12.string().min(1).max(80).optional(),
-        images: z12.array(z12.string()).max(10).optional().describe("Image URLs (/api/shop/images/<id> format)"),
-        attrs: z12.record(z12.string(), z12.union([z12.string(), z12.number(), z12.boolean()])).optional(),
-        contactName: z12.string().min(1).max(80).optional(),
-        contactPhone: z12.string().optional().nullable(),
-        contactEmail: z12.string().email().optional(),
-        showPhone: z12.boolean().optional(),
-        resellable: z12.boolean().optional(),
-        partnerCommissionPct: z12.number().min(0).max(30).optional()
+        id: z13.number().int().min(1).describe("Ad ID to update"),
+        category: z13.string().optional().describe("Category key"),
+        subcategory: z13.string().optional().nullable(),
+        title: z13.string().min(5).max(120).optional(),
+        description: z13.string().max(5e3).optional(),
+        priceGross: z13.number().int().min(1).max(2e9).nullable().optional().describe('New asking price in HUF gross, or null for "price on request"'),
+        negotiable: z13.boolean().optional(),
+        condition: z13.enum(["uj", "ujszeru", "hasznalt", "serult"]).optional(),
+        county: z13.string().optional(),
+        city: z13.string().min(1).max(80).optional(),
+        images: z13.array(z13.string()).max(10).optional().describe("Image URLs (/api/shop/images/<id> format)"),
+        attrs: z13.record(z13.string(), z13.union([z13.string(), z13.number(), z13.boolean()])).optional(),
+        contactName: z13.string().min(1).max(80).optional(),
+        contactPhone: z13.string().optional().nullable(),
+        contactEmail: z13.string().email().optional(),
+        showPhone: z13.boolean().optional(),
+        resellable: z13.boolean().optional(),
+        partnerCommissionPct: z13.number().min(0).max(30).optional()
       },
       annotations: { readOnlyHint: false, destructiveHint: false, idempotentHint: false }
     },
@@ -2710,8 +3005,8 @@ function registerShopTools(server, opts, flags = {}) {
       title: "Change ad status (pause, reactivate, or delete)",
       description: `Changes an ad's status. "szunetel" hides the ad from public search (paused); "aktiv" makes it visible again (also resets the expiry timer); "torolve" soft-deletes the ad permanently (irreversible). The ad must belong to the authenticated user.`,
       inputSchema: {
-        id: z12.number().int().min(1).describe("Ad ID"),
-        status: z12.enum(["aktiv", "szunetel", "torolve"]).describe(
+        id: z13.number().int().min(1).describe("Ad ID"),
+        status: z13.enum(["aktiv", "szunetel", "torolve"]).describe(
           '"aktiv" to show, "szunetel" to pause, "torolve" to permanently delete'
         )
       },
@@ -2732,11 +3027,11 @@ function registerShopTools(server, opts, flags = {}) {
       title: "Mark an ad as sold",
       description: 'Marks an ad as sold ("eladva"), removing it from public search. This is IRREVERSIBLE \u2014 a sold ad cannot be re-activated. Only call this when the user confirms the item has been sold. Side effect: all open reservations for this ad become "elutasitva" (declined). The Haszno Shop is free \u2014 there are no sales fees.',
       inputSchema: {
-        id: z12.number().int().min(1).describe("Ad ID"),
-        soldPriceGross: z12.number().int().min(1).optional().nullable().describe(
+        id: z13.number().int().min(1).describe("Ad ID"),
+        soldPriceGross: z13.number().int().min(1).optional().nullable().describe(
           "Actual sale price in HUF gross (optional, for your records)"
         ),
-        confirm: z12.literal(true).describe(
+        confirm: z13.literal(true).describe(
           "Must be exactly true. This permanently marks the ad as sold."
         )
       },
@@ -2759,7 +3054,7 @@ function registerShopTools(server, opts, flags = {}) {
       title: "Renew / bump an ad",
       description: "Renews an ad, resetting its 60-day expiry timer and bumping it back to the top of search results. Use this for ads that are about to expire or have fallen in ranking. The Haszno Shop is free \u2014 renewal has no cost.",
       inputSchema: {
-        id: z12.number().int().min(1).describe("Ad ID to renew")
+        id: z13.number().int().min(1).describe("Ad ID to renew")
       },
       annotations: { readOnlyHint: false, destructiveHint: false, idempotentHint: false }
     },
@@ -2778,11 +3073,11 @@ function registerShopTools(server, opts, flags = {}) {
       title: "Send an inquiry to the seller",
       description: "Sends a message or question to the seller of an ad. The seller will be notified and can respond through Haszno. Requires name, email, and message (at least 5 characters). The Haszno Shop is free.",
       inputSchema: {
-        adId: z12.number().int().min(1).describe("Ad ID to send the inquiry to"),
-        name: z12.string().min(1).max(80).describe("Your name"),
-        email: z12.string().email().describe("Your e-mail address"),
-        phone: z12.string().max(50).optional().nullable().describe("Your phone number (optional)"),
-        message: z12.string().min(5).max(2e3).describe("Your message or question for the seller (min 5 characters)")
+        adId: z13.number().int().min(1).describe("Ad ID to send the inquiry to"),
+        name: z13.string().min(1).max(80).describe("Your name"),
+        email: z13.string().email().describe("Your e-mail address"),
+        phone: z13.string().max(50).optional().nullable().describe("Your phone number (optional)"),
+        message: z13.string().min(5).max(2e3).describe("Your message or question for the seller (min 5 characters)")
       },
       annotations: { readOnlyHint: false, destructiveHint: false, idempotentHint: false }
     },
@@ -2807,8 +3102,8 @@ function registerShopTools(server, opts, flags = {}) {
       title: "Save or remove a favorite",
       description: "Saves or removes an ad from your favorites list. Set save=true to add to favorites (PUT /favorite), save=false to remove (DELETE /favorite). The Haszno Shop is free.",
       inputSchema: {
-        adId: z12.number().int().min(1).describe("Ad ID"),
-        save: z12.boolean().describe("true to save as favorite, false to remove")
+        adId: z13.number().int().min(1).describe("Ad ID"),
+        save: z13.boolean().describe("true to save as favorite, false to remove")
       },
       annotations: { readOnlyHint: false, destructiveHint: false, idempotentHint: true }
     },
@@ -2832,15 +3127,15 @@ function registerShopTools(server, opts, flags = {}) {
       title: "Place a reservation on an ad",
       description: "Places a reservation on a Haszno marketplace ad. This is a REAL action visible to the seller immediately \u2014 only call this when the user has explicitly confirmed they want to reserve this item. IMPORTANT: Reserving is NOT paying. Payment and handover happen directly between buyer and seller outside Haszno \u2014 the platform only facilitates the initial contact. The Haszno Shop is completely free \u2014 no reservation fees. You may optionally include a message, a counter-offer price (offerPriceGross), and your phone number. The seller will accept or decline the reservation. Returns error 409 if you already have an open reservation for this ad.",
       inputSchema: {
-        adId: z12.number().int().min(1).describe("Ad ID to reserve"),
-        message: z12.string().max(1e3).optional().describe("Optional message to the seller (max 1000 chars)"),
-        offerPriceGross: z12.number().int().min(1).optional().describe(
+        adId: z13.number().int().min(1).describe("Ad ID to reserve"),
+        message: z13.string().max(1e3).optional().describe("Optional message to the seller (max 1000 chars)"),
+        offerPriceGross: z13.number().int().min(1).optional().describe(
           "Counter-offer price in HUF gross (optional \u2014 omit to accept the listed price)"
         ),
-        phone: z12.string().max(50).optional().describe(
+        phone: z13.string().max(50).optional().describe(
           "Your phone number (optional; revealed to the seller only if they accept)"
         ),
-        confirm: z12.literal(true).describe(
+        confirm: z13.literal(true).describe(
           "Must be exactly true. This sends a real reservation request to the seller."
         )
       },
@@ -2865,8 +3160,8 @@ function registerShopTools(server, opts, flags = {}) {
       title: "Accept or decline a reservation (seller)",
       description: `Accepts or declines a pending reservation on one of your ads (seller action). action="accept": marks the reservation as "elfogadva" (accepted); the buyer's contact details become visible to you in the reservation. action="decline": marks the reservation as "elutasitva" (declined); the ad remains active for other buyers. Response includes counterPriceGross (seller's last counter-offer if any) and agreedPriceGross (agreed price). You can also send a counter-offer first with haszno_shop_counter_offer before accepting. The Haszno Shop is free \u2014 accepting a reservation does NOT create a payment.`,
       inputSchema: {
-        id: z12.number().int().min(1).describe("Reservation ID"),
-        action: z12.enum(["accept", "decline"]).describe('"accept" or "decline"')
+        id: z13.number().int().min(1).describe("Reservation ID"),
+        action: z13.enum(["accept", "decline"]).describe('"accept" or "decline"')
       },
       annotations: { readOnlyHint: false, destructiveHint: false, idempotentHint: false }
     },
@@ -2886,7 +3181,7 @@ function registerShopTools(server, opts, flags = {}) {
       title: "Cancel your reservation (buyer)",
       description: 'Cancels a reservation you placed as a buyer (status becomes "visszavonva"). Only pending ("fuggoben") or accepted ("elfogadva") reservations can be cancelled. The Haszno Shop is free \u2014 cancellation has no cost.',
       inputSchema: {
-        id: z12.number().int().min(1).describe("Reservation ID to cancel")
+        id: z13.number().int().min(1).describe("Reservation ID to cancel")
       },
       annotations: { readOnlyHint: false, destructiveHint: true, idempotentHint: false }
     },
@@ -2905,11 +3200,11 @@ function registerShopTools(server, opts, flags = {}) {
       title: "Complete a reservation (seller)",
       description: 'Marks a reservation as completed ("teljesitve"), confirming that the item has changed hands. This is a REAL, IRREVERSIBLE action \u2014 only call it when the user confirms the sale is done. Side effects: (1) the ad status changes to "eladva" (sold) and disappears from search; (2) all other open reservations for the same ad are automatically declined. Optionally record the actual sold price (soldPriceGross) for your records \u2014 it is not shared publicly. The response includes agreedPriceGross (the mutually agreed price if the buyer accepted a counter-offer). After completion, both buyer and seller can leave a rating with haszno_shop_review (sellerRating is the aggregate of these). REMINDER: Payment and handover happen directly between buyer and seller \u2014 Haszno does not process payments. The Haszno Shop is free \u2014 no commission on completed deals.',
       inputSchema: {
-        id: z12.number().int().min(1).describe("Reservation ID"),
-        soldPriceGross: z12.number().int().min(1).optional().nullable().describe(
+        id: z13.number().int().min(1).describe("Reservation ID"),
+        soldPriceGross: z13.number().int().min(1).optional().nullable().describe(
           "Actual sale price in HUF gross (optional, for your records only)"
         ),
-        confirm: z12.literal(true).describe(
+        confirm: z13.literal(true).describe(
           "Must be exactly true. This irreversibly marks the ad as sold."
         )
       },
@@ -2932,8 +3227,8 @@ function registerShopTools(server, opts, flags = {}) {
       title: "Send a counter-offer on a reservation (seller)",
       description: 'Seller sends a counter-offer price on a pending ("fuggoben") reservation. The buyer will be notified by e-mail and can accept it with haszno_shop_accept_counter, or ignore it and proceed normally. Can only be called on a "fuggoben" reservation that belongs to your ads. Returns the updated reservation with counterPriceGross set. The Haszno Shop is free \u2014 counter-offers carry no fee.',
       inputSchema: {
-        id: z12.number().int().min(1).describe("Reservation ID"),
-        priceGross: z12.number().int().min(1).describe("Counter-offer price in HUF gross (must be a positive integer)")
+        id: z13.number().int().min(1).describe("Reservation ID"),
+        priceGross: z13.number().int().min(1).describe("Counter-offer price in HUF gross (must be a positive integer)")
       },
       annotations: { readOnlyHint: false, destructiveHint: false, idempotentHint: false }
     },
@@ -2952,7 +3247,7 @@ function registerShopTools(server, opts, flags = {}) {
       title: "Accept the seller's counter-offer (buyer)",
       description: `Buyer accepts the seller's active counter-offer on a pending ("fuggoben") reservation. After acceptance: offerPriceGross is updated to the accepted counter price, counterPriceGross is cleared. The reservation remains "fuggoben" \u2014 the seller still needs to formally accept it. Returns error 409 when there is no active counter-offer on this reservation. The Haszno Shop is free \u2014 acceptance does NOT create a payment.`,
       inputSchema: {
-        id: z12.number().int().min(1).describe("Reservation ID")
+        id: z13.number().int().min(1).describe("Reservation ID")
       },
       annotations: { readOnlyHint: false, destructiveHint: false, idempotentHint: false }
     },
@@ -2971,7 +3266,7 @@ function registerShopTools(server, opts, flags = {}) {
       title: "List messages on a reservation",
       description: 'Returns the message thread for a reservation. Only the buyer and the seller of that reservation may read the messages. Each message has: id, author ("buyer" or "seller"), body (free text, may contain contact details), createdAt. Messages are ordered oldest first (up to 500). Requires authentication.',
       inputSchema: {
-        id: z12.number().int().min(1).describe("Reservation ID")
+        id: z13.number().int().min(1).describe("Reservation ID")
       },
       annotations: { readOnlyHint: true, destructiveHint: false }
     },
@@ -2990,8 +3285,8 @@ function registerShopTools(server, opts, flags = {}) {
       title: "Send a message on a reservation",
       description: "Sends a free-text message on a reservation thread. Both the buyer and the seller of that reservation may send messages. The other party will be notified by e-mail (message excerpt only). The body may contain contact details (Haszno does not filter message content). Rate-limited to 20 messages per hour. Requires authentication.",
       inputSchema: {
-        id: z12.number().int().min(1).describe("Reservation ID"),
-        body: z12.string().min(1).max(2e3).describe("Message text (1\u20132000 characters)")
+        id: z13.number().int().min(1).describe("Reservation ID"),
+        body: z13.string().min(1).max(2e3).describe("Message text (1\u20132000 characters)")
       },
       annotations: { readOnlyHint: false, destructiveHint: false, idempotentHint: false }
     },
@@ -3010,10 +3305,10 @@ function registerShopTools(server, opts, flags = {}) {
       title: "Leave a review on a completed reservation",
       description: `Leaves a review (rating 1\u20135 + optional comment) on a completed ("teljesitve") reservation. Both the buyer and the seller can each leave exactly one review per reservation. Returns error 409 when the reservation is not "teljesitve" or when already reviewed. The aggregate of a seller's received reviews forms their sellerRating. This is a REAL action \u2014 only call when the user confirms they want to submit the review. The Haszno Shop is free \u2014 reviews are voluntary.`,
       inputSchema: {
-        id: z12.number().int().min(1).describe('Reservation ID (must be "teljesitve" / completed)'),
-        rating: z12.number().int().min(1).max(5).describe("Rating from 1 (worst) to 5 (best)"),
-        comment: z12.string().max(1e3).optional().describe("Optional review comment (max 1000 characters)"),
-        confirm: z12.literal(true).describe(
+        id: z13.number().int().min(1).describe('Reservation ID (must be "teljesitve" / completed)'),
+        rating: z13.number().int().min(1).max(5).describe("Rating from 1 (worst) to 5 (best)"),
+        comment: z13.string().max(1e3).optional().describe("Optional review comment (max 1000 characters)"),
+        confirm: z13.literal(true).describe(
           "Must be exactly true. This submits a real, permanent review."
         )
       },
@@ -3036,8 +3331,8 @@ function registerShopTools(server, opts, flags = {}) {
       title: "Reply to an inquiry (seller)",
       description: "Seller replies to an inquiry (question) a potential buyer sent on one of their ads. The inquirer is notified by e-mail with the reply. Only the seller who owns the ad may reply. Each inquiry can have at most ONE reply. Returns error 409 when the inquiry already has a reply. The Haszno Shop is free.",
       inputSchema: {
-        id: z12.number().int().min(1).describe("Inquiry ID (from haszno_shop_list_inquiries)"),
-        message: z12.string().min(1).max(2e3).describe("Reply message (1\u20132000 characters)")
+        id: z13.number().int().min(1).describe("Inquiry ID (from haszno_shop_list_inquiries)"),
+        message: z13.string().min(1).max(2e3).describe("Reply message (1\u20132000 characters)")
       },
       annotations: { readOnlyHint: false, destructiveHint: false, idempotentHint: false }
     },
@@ -3072,17 +3367,17 @@ function registerShopTools(server, opts, flags = {}) {
       title: "Save a search with optional e-mail alerts",
       description: "Saves a search filter set so the user can be notified by e-mail when matching new ads appear. Maximum 20 saved searches per user; returns error 422 when the cap is reached. alertEnabled defaults to true \u2014 set to false to save without notifications. The filters object accepts the same fields as haszno_shop_search_ads. Returns the created SavedSearch with its id. Requires authentication. The Haszno Shop is free.",
       inputSchema: {
-        name: z12.string().min(1).max(80).describe("Human-readable name for this saved search (max 80 chars)"),
-        filters: z12.object({
-          q: z12.string().optional().describe("Full-text search query"),
-          cat: z12.string().optional().describe("Category key"),
-          sub: z12.string().optional().describe("Subcategory key"),
-          min: z12.number().int().min(0).optional().describe("Minimum price in HUF gross"),
-          max: z12.number().int().min(0).optional().describe("Maximum price in HUF gross"),
-          county: z12.string().optional().describe("County name"),
-          cond: z12.enum(["uj", "ujszeru", "hasznalt", "serult"]).optional().describe("Product condition")
+        name: z13.string().min(1).max(80).describe("Human-readable name for this saved search (max 80 chars)"),
+        filters: z13.object({
+          q: z13.string().optional().describe("Full-text search query"),
+          cat: z13.string().optional().describe("Category key"),
+          sub: z13.string().optional().describe("Subcategory key"),
+          min: z13.number().int().min(0).optional().describe("Minimum price in HUF gross"),
+          max: z13.number().int().min(0).optional().describe("Maximum price in HUF gross"),
+          county: z13.string().optional().describe("County name"),
+          cond: z13.enum(["uj", "ujszeru", "hasznalt", "serult"]).optional().describe("Product condition")
         }).describe("Search filter criteria (same fields as haszno_shop_search_ads)"),
-        alertEnabled: z12.boolean().optional().describe("Send e-mail alerts when new matching ads appear (default true)")
+        alertEnabled: z13.boolean().optional().describe("Send e-mail alerts when new matching ads appear (default true)")
       },
       annotations: { readOnlyHint: false, destructiveHint: false, idempotentHint: false }
     },
@@ -3105,7 +3400,7 @@ function registerShopTools(server, opts, flags = {}) {
       title: "Delete a saved search",
       description: "Deletes a saved search by its id. If the id does not exist or does not belong to the authenticated user, the deletion is a no-op (idempotent). Returns { ok: true } on success. Requires authentication.",
       inputSchema: {
-        id: z12.number().int().min(1).describe("Saved search ID (from haszno_shop_list_saved_searches)")
+        id: z13.number().int().min(1).describe("Saved search ID (from haszno_shop_list_saved_searches)")
       },
       annotations: { readOnlyHint: false, destructiveHint: true, idempotentHint: true }
     },
@@ -3124,8 +3419,8 @@ function registerShopTools(server, opts, flags = {}) {
       title: "Subscribe to / unsubscribe from price-drop alerts for an ad",
       description: `Subscribes to (watch=true) or unsubscribes from (watch=false) price-drop e-mail alerts for a specific ad. When subscribed, the user gets an e-mail when the ad's price drops. watch=true: PUT /api/v1/shop/ads/:adId/watch \u2014 the ad must be "aktiv"; returns { watched: true }. watch=false: DELETE /api/v1/shop/ads/:adId/watch \u2014 idempotent; returns { watched: false }. Returns error 400 if the ad is not active (watch=true only). Requires authentication. The Haszno Shop is free.`,
       inputSchema: {
-        adId: z12.number().int().min(1).describe("Ad ID to watch or unwatch"),
-        watch: z12.boolean().describe("true to subscribe to price-drop alerts, false to unsubscribe")
+        adId: z13.number().int().min(1).describe("Ad ID to watch or unwatch"),
+        watch: z13.boolean().describe("true to subscribe to price-drop alerts, false to unsubscribe")
       },
       annotations: { readOnlyHint: false, destructiveHint: false, idempotentHint: true }
     },
@@ -3149,7 +3444,7 @@ function registerShopTools(server, opts, flags = {}) {
       title: "Extract ad data from an external URL (draft only \u2014 never posts)",
       description: "Fetches a product or classifieds listing page by URL and extracts its metadata (title, description, price, images) for use as a pre-filled ad draft. This tool NEVER creates or posts an ad \u2014 it only returns extracted data. You must still call haszno_shop_create_ad (with confirm:true) separately after reviewing the result. Facebook URLs are rejected with a helpful error (login wall). Returns: title?, description?, price?, images (array of strings), parsed (extracted car/item attributes). Rate-limited to 10 imports per hour. Requires authentication.",
       inputSchema: {
-        url: z12.string().url().max(2048).describe("Public URL of the product or classifieds listing page to import from")
+        url: z13.string().url().max(2048).describe("Public URL of the product or classifieds listing page to import from")
       },
       annotations: { readOnlyHint: false, destructiveHint: false, idempotentHint: false }
     },
@@ -3184,7 +3479,7 @@ function registerShopTools(server, opts, flags = {}) {
       title: "Save or update the ad creation draft",
       description: "Saves or replaces the authenticated user's server-side ad creation draft (upsert). Pass any subset of ad fields (same structure as haszno_shop_create_ad, without confirm). The draft is kept until the user explicitly clears it (haszno_shop_clear_draft) or posts the ad (haszno_shop_create_ad clears the draft automatically). Maximum draft size is 64 KB. Image URLs must be in /api/shop/images/<id> format. Returns { payload: {...}, updatedAt: string }. Requires authentication.",
       inputSchema: {
-        payload: z12.record(z12.string(), z12.unknown()).describe(
+        payload: z13.record(z13.string(), z13.unknown()).describe(
           "Partial ad fields to store in the draft. Any subset of haszno_shop_create_ad fields is accepted (e.g. { title, category, priceGross, description, images, attrs, \u2026 }). Image URLs must be in /api/shop/images/<id> format (from haszno_shop_upload_image)."
         )
       },
@@ -3221,16 +3516,16 @@ function registerShopTools(server, opts, flags = {}) {
       title: "Set seller type (one-time setup required before first ad)",
       description: `Sets the seller type for the authenticated user's shop. This is a ONE-TIME setup that MUST be completed before posting the first ad \u2014 without it, haszno_shop_create_ad returns HTTP 409 "Az elad\xF3i t\xEDpus megad\xE1sa k\xF6telez\u0151 az els\u0151 hirdet\xE9s felad\xE1s\xE1hoz". Two seller types are supported: "maganszemely" (private individual) and "kereskedo" (registered business/trader). For "kereskedo", companyName and companyAddress are required. The profile can be updated later; calling this again replaces the existing value. Returns the updated seller profile. Requires authentication.`,
       inputSchema: {
-        sellerType: z12.enum(["maganszemely", "kereskedo"]).describe(
+        sellerType: z13.enum(["maganszemely", "kereskedo"]).describe(
           '"maganszemely" = private individual, "kereskedo" = business/trader'
         ),
-        companyName: z12.string().min(1).max(200).optional().describe(
+        companyName: z13.string().min(1).max(200).optional().describe(
           'Company name (required when sellerType is "kereskedo")'
         ),
-        companyAddress: z12.string().min(1).max(400).optional().describe(
+        companyAddress: z13.string().min(1).max(400).optional().describe(
           'Company registered address (required when sellerType is "kereskedo")'
         ),
-        companyRegNumber: z12.string().max(50).optional().nullable().describe(
+        companyRegNumber: z13.string().max(50).optional().nullable().describe(
           'Company registration number (optional, only for "kereskedo")'
         )
       },
@@ -3261,7 +3556,7 @@ function registerShopTools(server, opts, flags = {}) {
       title: "Remove image background (AI)",
       description: "Processes an already-uploaded image through the AI background removal service. The original image is preserved; a NEW image row is created with the processed result. Returns { id, url } of the NEW background-removed image (use this id/url in your ad). The source image must exist and belong to the authenticated user's shop. Rate-limited to 10 calls per hour. Returns error 503 when the background removal feature is not enabled on this server.",
       inputSchema: {
-        imageId: z12.number().int().min(1).describe("ID of an already-uploaded image (from haszno_shop_upload_image)")
+        imageId: z13.number().int().min(1).describe("ID of an already-uploaded image (from haszno_shop_upload_image)")
       },
       annotations: { readOnlyHint: false, destructiveHint: false, idempotentHint: false }
     },
@@ -3323,6 +3618,7 @@ async function main() {
   registerConnectionsTools(server, client);
   registerPeersTools(server, client);
   registerBlogTools(server, client);
+  registerManagerTools(server, client);
   registerShopTools(server, httpOpts);
   const transport = new StdioServerTransport();
   await server.connect(transport);

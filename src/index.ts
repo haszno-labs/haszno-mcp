@@ -32,6 +32,7 @@ import { registerCatalogueTools } from './tools/catalogue.js'
 import { registerConnectionsTools } from './tools/connections.js'
 import { registerPeersTools } from './tools/peers.js'
 import { registerBlogTools } from './tools/blog.js'
+import { registerManagerTools } from './tools/manager.js'
 import { registerShopTools } from './tools/shop.js'
 
 /** Read flat config from ~/.config/haszno/config.json with ~/.config/arfutar fallback. */
@@ -160,6 +161,7 @@ async function main() {
   registerConnectionsTools(server, client)
   registerPeersTools(server, client)
   registerBlogTools(server, client)
+  registerManagerTools(server, client)
   registerShopTools(server, httpOpts)
 
   const transport = new StdioServerTransport()
