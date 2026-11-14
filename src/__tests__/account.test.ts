@@ -32,7 +32,8 @@ vi.mock('node:fs', async (importOriginal) => {
   }
 })
 import type { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js'
-import type { HasznoClient, Settings, Stats, Impact, Supplier } from '../client/index.js'
+import type { HasznoClient, Settings, Stats, Impact, Supplier, WhoAmI } from '../client/index.js'
+import { HasznoApiError } from '../client/index.js'
 import { registerAccountTools } from '../tools/account.js'
 
 // ─── Stub server that captures tool registrations ────────────────────────────
@@ -117,9 +118,24 @@ const mockSuppliers: Supplier[] = [
   },
 ]
 
+const mockWhoAmI: WhoAmI = {
+  id: 1,
+  email: 'bolt@example.com',
+  name: 'Teszt Bolt',
+  shopId: 42,
+  shopName: 'Teszt Bolt Kft.',
+  founderSince: '2024-01-01',
+  role: 'owner',
+  tokenScope: 'write',
+}
+
 function makeClient(overrides: Partial<HasznoClient> = {}): HasznoClient {
   return {
     health: { check: vi.fn().mockResolvedValue({ ok: true }) },
+    auth: {
+      me: vi.fn().mockResolvedValue(mockWhoAmI),
+      revokeCurrentToken: vi.fn().mockResolvedValue({ ok: true }),
+    },
     settings: {
       get: vi.fn().mockResolvedValue(mockSettings),
       update: vi.fn().mockResolvedValue(mockSettings),
@@ -364,6 +380,60 @@ describe('registerAccountTools', () => {
         confirm: true,
       })
       expect(isError(result)).toBe(true)
+    })
+  })
+
+  // ── haszno_account_whoami ───────────────────────────────────────────────────
+
+  describe('haszno_account_whoami', () => {
+    it('returns identity including tokenScope', async () => {
+      const result = await stub.getToolCb('haszno_account_whoami')({})
+      expect(isError(result)).toBe(false)
+      const data = parseResult(result) as WhoAmI
+      expect(data.email).toBe('bolt@example.com')
+      expect(data.shopName).toBe('Teszt Bolt Kft.')
+      expect(data.tokenScope).toBe('write')
+      expect(client.auth.me).toHaveBeenCalledTimes(1)
+    })
+
+    it('returns an error result with 401 hint on auth failure', async () => {
+      const err401 = new HasznoApiError(401, 'Érvényes Bearer token szükséges')
+      vi.mocked(client.auth.me).mockRejectedValueOnce(err401)
+      const result = await stub.getToolCb('haszno_account_whoami')({})
+      expect(isError(result)).toBe(true)
+      const { content } = result as { content: Array<{ text: string }> }
+      // The 401 hint in account.ts embeds "token érvénytelen" into the message
+      expect(content[0].text).toContain('token érvénytelen')
+    })
+
+    it('returns an error result when auth.me throws a generic error', async () => {
+      vi.mocked(client.auth.me).mockRejectedValueOnce(new Error('network error'))
+      const result = await stub.getToolCb('haszno_account_whoami')({})
+      expect(isError(result)).toBe(true)
+      const { content } = result as { content: Array<{ text: string }> }
+      expect(content[0].text).toContain('sikertelen')
+    })
+  })
+
+  // ── haszno_auth_revoke_token ────────────────────────────────────────────────
+
+  describe('haszno_auth_revoke_token', () => {
+    it('calls revokeCurrentToken and returns ok: true', async () => {
+      const result = await stub.getToolCb('haszno_auth_revoke_token')({ confirm: true })
+      expect(isError(result)).toBe(false)
+      const data = parseResult(result) as Record<string, unknown>
+      expect(data.ok).toBe(true)
+      expect(client.auth.revokeCurrentToken).toHaveBeenCalledTimes(1)
+    })
+
+    it('returns an error result when revokeCurrentToken rejects', async () => {
+      vi.mocked(client.auth.revokeCurrentToken).mockRejectedValueOnce(
+        new HasznoApiError(400, 'Csak Bearer tokennel hívható'),
+      )
+      const result = await stub.getToolCb('haszno_auth_revoke_token')({ confirm: true })
+      expect(isError(result)).toBe(true)
+      const { content } = result as { content: Array<{ text: string }> }
+      expect(content[0].text).toContain('sikertelen')
     })
   })
 })

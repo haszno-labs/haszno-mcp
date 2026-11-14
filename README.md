@@ -114,7 +114,11 @@ haszno_account_configure(apiUrl: "https://haszno.com", apiKey: "haszno_xxxx", co
 
 ## Tools
 
-### Account (`haszno_account_*`)
+### Identity & token (`haszno_account_whoami`, `haszno_auth_*`)
+- `haszno_account_whoami` — returns id, email, shopId, shopName, role, **tokenScope** (read/write); works with all credential modes; recommended first call
+- `haszno_auth_revoke_token` — permanently revokes the current Bearer token; Bearer only; requires `confirm: true`
+
+### Account (`haszno_account_*`, `haszno_ping`)
 - `haszno_ping` — check connectivity
 - `haszno_account_get_settings` — fetch pricing rules
 - `haszno_account_update_settings` — update pricing rules
@@ -132,7 +136,11 @@ haszno_account_configure(apiUrl: "https://haszno.com", apiKey: "haszno_xxxx", co
 - `haszno_catalog_sync_supplier` — sync a supplier
 
 ### Products (`haszno_products_*`)
-- *(coming soon)*
+- `haszno_products_list` — list shop products with price, margin, stock; shop token calls `/api/agent/products` (includes `recommended.floorGross`), legacy calls `/api/products`; supports `all=true` in legacy mode
+- `haszno_products_update` — update market price / competitor name / direct price override *(legacy key only)*
+- `haszno_products_set_listing` — list or unlist a product *(legacy key only)*
+- `haszno_products_apply_prices` — apply AI-recommended prices immediately *(legacy key only)*; shop token users: use `haszno_proposals_propose` instead
+- `haszno_products_ai_description` — generate an AI product description *(legacy key only)*
 
 ### Price proposals (`haszno_proposals_*`)
 - `haszno_proposals_list` — list / paginate proposals
@@ -262,9 +270,28 @@ Reserving is not paying: payment and handover happen directly between buyer and 
 - `haszno_shop_clear_draft` — permanently delete your ad draft
 - `haszno_shop_remove_background` — remove the background from an already-uploaded image (`imageId`); returns a new image object `{ id, url }`
 
+**Partner network & syndication (requires `sellerType = 'kereskedo'`)**
+- `haszno_shop_partner_profile_get` — get or auto-create your partner profile; returns `{ refCode, displayName, feedJsonUrl, feedXmlUrl, embedUrl }`; first call creates it
+- `haszno_shop_partner_profile_update` — update `displayName` (2–60 chars); call `haszno_shop_partner_profile_get` first if the profile may not exist yet
+- `haszno_shop_partner_syndications_list` — list your active ad syndications (markup is returned without the private multiplier)
+- `haszno_shop_partner_syndication_upsert` — create or update a syndicated ad listing (`adId`, `markupPct` 0–100, `markupFt` 0–50 000 000); requires `sellerType = 'kereskedo'` → 403 `seller_type_required` otherwise
+- `haszno_shop_partner_syndication_remove` — stop syndicating an ad (`adId`); requires `confirm: true`
+
+**Moderation**
+- `haszno_shop_moderation_list` — list your ads currently under moderation review
+- `haszno_shop_moderation_appeal` — submit an appeal for a moderation decision (`id`, `message` 10–2000 chars); requires `confirm: true`
+
 **Reservation statuses:** `fuggoben` (pending), `elfogadva` (accepted), `elutasitva` (declined/auto-declined), `visszavonva` (cancelled by buyer), `teljesitve` (completed), `lejart` (hold expired)
 
 **Price negotiation flow:** buyer places reservation (`offerPriceGross?`) → seller counters (`haszno_shop_counter_offer`) → buyer accepts (`haszno_shop_accept_counter`) → `agreedPriceGross` is set → seller completes → buyer reviews
+
+### MCP Resources
+
+The server exposes one MCP resource that agents can read before calling any tool:
+
+| URI | Description |
+|---|---|
+| `haszno://capabilities` | Active credential mode (`shopToken` / `legacyKey` / `basic`), which tool groups are available, what limitations apply, and the full error code map. Read this first if you are unsure which tools to call. |
 
 ---
 

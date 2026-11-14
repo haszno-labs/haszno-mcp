@@ -1,6 +1,6 @@
 {
   "name": "@haszno/mcp",
-  "version": "0.4.0",
+  "version": "0.5.0",
   "description": "MCP server for the Haszno API (stdio transport) — also importable as a library via @haszno/mcp/lib",
   "license": "MIT",
   "private": true,
