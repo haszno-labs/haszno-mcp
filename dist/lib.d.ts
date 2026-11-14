@@ -24,4 +24,8 @@ declare function registerShopTools(server: McpServer, opts: HttpOptions, flags?:
     remote?: boolean;
 }): void;
 
-export { type HttpOptions, registerShopTools };
+declare function registerJobTools(server: McpServer, opts: HttpOptions, flags?: {
+    remote?: boolean;
+}): void;
+
+export { type HttpOptions, registerJobTools, registerShopTools };
