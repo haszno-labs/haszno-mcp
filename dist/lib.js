@@ -57,7 +57,7 @@ async function request(method, path2, body, opts) {
   const headers = {
     "Content-Type": "application/json",
     "Accept": "application/json",
-    "User-Agent": "haszno-mcp/0.4.0",
+    "User-Agent": "haszno-mcp/0.6.0",
     ...buildAuthHeader(opts)
   };
   let lastError;
