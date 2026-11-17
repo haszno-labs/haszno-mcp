@@ -14,6 +14,7 @@
  * Retries 5xx and 429 with exponential back-off (max 3 attempts).
  */
 import { HasznoApiError } from './error.js'
+import { currentToolName } from './tool-context.js'
 
 /** Prefix that server-issued shop API tokens always carry. */
 export const SHOP_TOKEN_PREFIX = 'haszno_'
@@ -93,11 +94,13 @@ export async function request<T>(
   const retryDelayMs = opts.retryDelayMs ?? 500
   const timeoutMs = opts.timeoutMs ?? 30_000
 
+  const toolName = currentToolName()
   const headers: Record<string, string> = {
     'Content-Type': 'application/json',
     'Accept': 'application/json',
     'User-Agent': 'haszno-mcp/0.6.0',
     ...buildAuthHeader(opts),
+    ...(toolName ? { 'X-Haszno-Tool': toolName } : {}),
   }
 
   let lastError: unknown
