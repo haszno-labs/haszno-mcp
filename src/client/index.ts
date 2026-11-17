@@ -65,6 +65,9 @@ import type {
   AgentAction,
   ActionStatus,
   ActionInput,
+  ModulePriceList,
+  ShopModuleList,
+  ModuleActivateResult,
 } from './types.js'
 
 export type { HttpOptions }
@@ -312,6 +315,39 @@ export interface HasznoClient {
     proposeAction(body: ActionInput & { reason: string; reportItemId?: number }): Promise<AgentAction>
     rejectAction(id: number): Promise<AgentAction>
   }
+
+  modules: {
+    /**
+     * Returns the public price-list for all modules.
+     * No auth required — public endpoint.
+     * GET /api/shop/modules/prices
+     */
+    listPrices(): Promise<ModulePriceList>
+    /**
+     * Returns the modules currently active/pending for this shop.
+     * Requires Bearer (haszno_…).
+     * GET /api/shop/modules/my
+     */
+    listMy(): Promise<ShopModuleList>
+    /**
+     * Start activation for a module. Billable modules return a checkoutUrl.
+     * Requires Bearer + write scope + ownership (tulajdonos).
+     * POST /api/shop/modules/:moduleId/activate
+     */
+    activate(moduleId: string): Promise<ModuleActivateResult>
+    /**
+     * Cancel a currently-active module subscription.
+     * Requires Bearer + write scope + ownership (tulajdonos).
+     * POST /api/shop/modules/:moduleId/cancel
+     */
+    cancel(moduleId: string): Promise<{ moduleId: string; status: string }>
+    /**
+     * Resume a cancelled-but-not-yet-ended subscription.
+     * Requires Bearer + write scope + ownership (tulajdonos).
+     * POST /api/shop/modules/:moduleId/resume
+     */
+    resume(moduleId: string): Promise<{ moduleId: string; status: string }>
+  }
 }
 
 // ── Internal helpers ──────────────────────────────────────────────────────────
@@ -499,6 +535,15 @@ function createShopTokenClient(opts: HttpOptions): HasznoClient {
       },
       proposeAction: (body) => post('/api/agent/actions', body, o),
       rejectAction: (id) => post(`/api/agent/actions/${id}/reject`, null, o),
+    },
+
+    // /api/shop/modules/* — available in shop token mode (Bearer haszno_…)
+    modules: {
+      listPrices: () => get('/api/shop/modules/prices', o),
+      listMy: () => get('/api/shop/modules/my', o),
+      activate: (moduleId) => post(`/api/shop/modules/${moduleId}/activate`, null, o),
+      cancel: (moduleId) => post(`/api/shop/modules/${moduleId}/cancel`, null, o),
+      resume: (moduleId) => post(`/api/shop/modules/${moduleId}/resume`, null, o),
     },
   }
 }
@@ -689,6 +734,17 @@ function createLegacyClient(opts: HttpOptions): HasznoClient {
       listActions: notSupportedLegacy('manager.listActions'),
       proposeAction: notSupportedLegacy('manager.proposeAction'),
       rejectAction: notSupportedLegacy('manager.rejectAction'),
+    },
+
+    // modules.listPrices is public; modules.listMy + write ops require Bearer.
+    // In legacy key mode (x-api-key) the shop/modules/* routes require a session
+    // or Bearer token, so only listPrices works; write ops and listMy fail with 401.
+    modules: {
+      listPrices: () => get('/api/shop/modules/prices', o),
+      listMy: () => get('/api/shop/modules/my', o),
+      activate: (moduleId) => post(`/api/shop/modules/${moduleId}/activate`, null, o),
+      cancel: (moduleId) => post(`/api/shop/modules/${moduleId}/cancel`, null, o),
+      resume: (moduleId) => post(`/api/shop/modules/${moduleId}/resume`, null, o),
     },
   }
 }

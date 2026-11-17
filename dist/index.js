@@ -62,7 +62,7 @@ async function request(method, path4, body, opts) {
   const headers = {
     "Content-Type": "application/json",
     "Accept": "application/json",
-    "User-Agent": "haszno-mcp/0.4.0",
+    "User-Agent": "haszno-mcp/0.6.0",
     ...buildAuthHeader(opts)
   };
   let lastError;
@@ -287,6 +287,14 @@ function createShopTokenClient(opts) {
       },
       proposeAction: (body) => post("/api/agent/actions", body, o),
       rejectAction: (id) => post(`/api/agent/actions/${id}/reject`, null, o)
+    },
+    // /api/shop/modules/* — available in shop token mode (Bearer haszno_…)
+    modules: {
+      listPrices: () => get("/api/shop/modules/prices", o),
+      listMy: () => get("/api/shop/modules/my", o),
+      activate: (moduleId) => post(`/api/shop/modules/${moduleId}/activate`, null, o),
+      cancel: (moduleId) => post(`/api/shop/modules/${moduleId}/cancel`, null, o),
+      resume: (moduleId) => post(`/api/shop/modules/${moduleId}/resume`, null, o)
     }
   };
 }
@@ -453,6 +461,16 @@ function createLegacyClient(opts) {
       listActions: notSupportedLegacy("manager.listActions"),
       proposeAction: notSupportedLegacy("manager.proposeAction"),
       rejectAction: notSupportedLegacy("manager.rejectAction")
+    },
+    // modules.listPrices is public; modules.listMy + write ops require Bearer.
+    // In legacy key mode (x-api-key) the shop/modules/* routes require a session
+    // or Bearer token, so only listPrices works; write ops and listMy fail with 401.
+    modules: {
+      listPrices: () => get("/api/shop/modules/prices", o),
+      listMy: () => get("/api/shop/modules/my", o),
+      activate: (moduleId) => post(`/api/shop/modules/${moduleId}/activate`, null, o),
+      cancel: (moduleId) => post(`/api/shop/modules/${moduleId}/cancel`, null, o),
+      resume: (moduleId) => post(`/api/shop/modules/${moduleId}/resume`, null, o)
     }
   };
 }
@@ -4495,6 +4513,157 @@ markupPct: 0\u2013100 (percentage markup on the ad's asking price). markupFt: 0\
   registerJobTools(server, opts, flags);
 }
 
+// src/tools/modules.ts
+import { z as z16 } from "zod";
+var MODULE_IDS = [
+  "webshop",
+  "dropshipping_supplier",
+  "fitness",
+  "booking_salon",
+  "booking_clinic",
+  "booking_other",
+  "restaurant"
+];
+function registerModulesTools(server, client) {
+  server.registerTool(
+    "haszno_modules_list_prices",
+    {
+      title: "Module price list",
+      description: "Returns the public price-list for all Haszno workspace modules: module id, monthly price in HUF, and whether it is billable (requires payment). Free modules (webshop, dropshipping_supplier, restaurant) have priceHuf = 0. No authentication required.",
+      annotations: { readOnlyHint: true, openWorldHint: false },
+      inputSchema: {}
+    },
+    async () => {
+      const result = await client.modules.listPrices();
+      return {
+        content: [
+          {
+            type: "text",
+            text: JSON.stringify(result, null, 2)
+          }
+        ]
+      };
+    }
+  );
+  server.registerTool(
+    "haszno_modules_list_my",
+    {
+      title: "My active modules",
+      description: "Returns the workspace modules currently active (or pending activation) for this shop. Shows module id, subscription status (pending/active/cancelled/ended), billing period, and expiry. Requires a shop Bearer token (haszno_\u2026).",
+      annotations: { readOnlyHint: true, openWorldHint: false },
+      inputSchema: {}
+    },
+    async () => {
+      const result = await client.modules.listMy();
+      return {
+        content: [
+          {
+            type: "text",
+            text: JSON.stringify(result, null, 2)
+          }
+        ]
+      };
+    }
+  );
+  server.registerTool(
+    "haszno_modules_activate",
+    {
+      title: "Activate a module",
+      description: "Starts the activation flow for a Haszno workspace module. For free modules (webshop, dropshipping_supplier, restaurant) this activates immediately. For billable modules (fitness, booking_salon, booking_clinic, booking_other) it returns a checkoutUrl that the user must visit to complete the payment. IMPORTANT: If a checkoutUrl is returned, tell the user to open it and complete payment \u2014 do NOT report the module as active until payment is confirmed. Requires confirm: true (safety gate). Requires a write-scope shop Bearer token (haszno_\u2026) with ownership (tulajdonos) role.",
+      annotations: { readOnlyHint: false, openWorldHint: false },
+      inputSchema: {
+        moduleId: z16.enum(MODULE_IDS).describe("The module to activate."),
+        confirm: z16.literal(true).describe(
+          "Must be exactly true. This may start a real payment flow \u2014 only set after the user confirms."
+        )
+      }
+    },
+    async (args) => {
+      if (args.confirm !== true) {
+        return {
+          content: [
+            {
+              type: "text",
+              text: "Confirm required: set confirm: true after the user has acknowledged this may trigger a payment."
+            }
+          ]
+        };
+      }
+      const result = await client.modules.activate(args.moduleId);
+      const lines = [`Module: ${args.moduleId}`, `Status: ${result.status}`];
+      if (result.checkout?.redirectUrl) {
+        lines.push(`Checkout URL: ${result.checkout.redirectUrl}`);
+        lines.push(`Order ref: ${result.checkout.orderRef}`);
+        lines.push(`Amount: ${result.checkout.amountHuf} HUF`);
+        lines.push(
+          "The user must visit the checkout URL to complete payment. The module will not be active until payment succeeds."
+        );
+      } else if (result.status === "active") {
+        lines.push(result.message ?? "Module activated immediately (free module, no payment required).");
+      }
+      return {
+        content: [{ type: "text", text: lines.join("\n") }]
+      };
+    }
+  );
+  server.registerTool(
+    "haszno_modules_cancel",
+    {
+      title: "Cancel a module subscription",
+      description: "Cancels a currently-active module subscription. The module remains accessible until the end of the current paid period (not an immediate shutdown). Requires confirm: true. Requires ownership (tulajdonos) role.",
+      annotations: { readOnlyHint: false, openWorldHint: false },
+      inputSchema: {
+        moduleId: z16.enum(MODULE_IDS).describe("The module to cancel."),
+        confirm: z16.literal(true).describe("Must be exactly true (safety gate).")
+      }
+    },
+    async (args) => {
+      if (args.confirm !== true) {
+        return {
+          content: [{ type: "text", text: "Confirm required: set confirm: true to cancel the module." }]
+        };
+      }
+      const result = await client.modules.cancel(args.moduleId);
+      return {
+        content: [
+          {
+            type: "text",
+            text: JSON.stringify(result, null, 2)
+          }
+        ]
+      };
+    }
+  );
+  server.registerTool(
+    "haszno_modules_resume",
+    {
+      title: "Resume a cancelled module",
+      description: "Resumes a module subscription that was cancelled but has not yet expired. Has no effect if the module is already active or if the period has already ended. Requires confirm: true. Requires ownership (tulajdonos) role.",
+      annotations: { readOnlyHint: false, openWorldHint: false },
+      inputSchema: {
+        moduleId: z16.enum(MODULE_IDS).describe("The module to resume."),
+        confirm: z16.literal(true).describe("Must be exactly true (safety gate).")
+      }
+    },
+    async (args) => {
+      if (args.confirm !== true) {
+        return {
+          content: [{ type: "text", text: "Confirm required: set confirm: true to resume the module." }]
+        };
+      }
+      const result = await client.modules.resume(args.moduleId);
+      return {
+        content: [
+          {
+            type: "text",
+            text: JSON.stringify(result, null, 2)
+          }
+        ]
+      };
+    }
+  );
+}
+
 // src/index.ts
 function readHasznoConfig() {
   const candidates = [
@@ -4528,7 +4697,7 @@ async function main() {
   const client = createClient(httpOpts);
   const server = new McpServer({
     name: "haszno",
-    version: "0.5.0"
+    version: "0.6.0"
   });
   const credMode = apiKey && apiKey.startsWith("haszno_") ? "shopToken" : apiKey ? "legacyKey" : basicAuth ? "basic" : "unauthenticated";
   const capabilityDoc = {
@@ -4596,6 +4765,7 @@ async function main() {
   registerBlogTools(server, client);
   registerManagerTools(server, client);
   registerShopTools(server, httpOpts);
+  registerModulesTools(server, client);
   const transport = new StdioServerTransport();
   await server.connect(transport);
 }

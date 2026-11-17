@@ -96,7 +96,7 @@ export async function request<T>(
   const headers: Record<string, string> = {
     'Content-Type': 'application/json',
     'Accept': 'application/json',
-    'User-Agent': 'haszno-mcp/0.4.0',
+    'User-Agent': 'haszno-mcp/0.6.0',
     ...buildAuthHeader(opts),
   }
 
