@@ -305,6 +305,91 @@ Reserving is not paying: payment and handover happen directly between buyer and 
 
 **Price negotiation flow:** buyer places reservation (`offerPriceGross?`) → seller counters (`haszno_shop_counter_offer`) → buyer accepts (`haszno_shop_accept_counter`) → `agreedPriceGross` is set → seller completes → buyer reviews
 
+### Időpontfoglalás / Booking (`haszno_booking_*`)
+
+> **Requires a shop token** (`haszno_…`) with at least read scope. Write operations (upsert, delete, publish) require a write-scope token.
+> All booking routes call `/api/agent/booking/*`.
+
+| Tool | Confirm | Description |
+|---|---|---|
+| `haszno_booking_get_setup` | — | Read the full booking config: page, services, resources, hours, checklist, nextStep. **Start here.** |
+| `haszno_booking_apply_setup` | `confirm:true` or `dryRun:true` | Bulk-apply setup in one call. Use `dryRun:true` first to preview, then `confirm:true` to write. |
+| `haszno_booking_set_theme` | — | Partial theme update: accent, background, radius, font, logoUrl, coverUrl, headline, buttonLabel. |
+| `haszno_booking_upsert_service` | — | Create or update a service (matched by name). Returns the service with its id. |
+| `haszno_booking_delete_service` | `confirm:true` | Soft-delete a service by id. History is preserved. |
+| `haszno_booking_upsert_resource` | — | Create or update a bookable resource (matched by name). |
+| `haszno_booking_delete_resource` | `confirm:true` | Soft-delete a resource by id. |
+| `haszno_booking_set_hours` | — | Replace the full weekly schedule (all days at once). |
+| `haszno_booking_add_closure` | — | Add a date exception / closure (full-day or partial). |
+| `haszno_booking_publish` | `confirm:true` | Publish or unpublish the booking page. Fails with 422 if checklist is incomplete. |
+| `haszno_booking_list_appointments` | — | List appointments for a date range (from+to required, max 31 days). Read-only. |
+
+#### Recommended setup workflow
+
+```
+// 1. Inspect current state and checklist
+haszno_booking_get_setup()
+
+// 2. Preview the full setup without writing
+haszno_booking_apply_setup({
+  dryRun: true,
+  services: [{ name: "Hajvágás", durationMin: 30, priceHuf: 3000 }],
+  resources: [{ name: "1-es szék" }],
+  hours: { mon: [{ open: "09:00", close: "17:00" }], sat: null, sun: null },
+  theme: { accent: "#0ea5e9", buttonLabel: "Foglalok" }
+})
+// → { dryRun: true, changes: ["Create service Hajvágás", ...] }
+
+// 3. Show the preview to the user, get confirmation
+
+// 4. Apply
+haszno_booking_apply_setup({ confirm: true, services: [...], resources: [...], hours: {...}, theme: {...} })
+
+// 5. Go live (only after checklist is complete)
+haszno_booking_publish({ published: true, confirm: true })
+```
+
+#### Connecting to Claude Code
+
+```bash
+# Recommended — run directly from GitHub (no local clone needed)
+claude mcp add haszno -- npx -y github:haszno-labs/haszno-mcp
+
+# Then set your shop token
+export HASZNO_API_TOKEN=haszno_xxxxxxxxxxxxxxxxxxxx
+```
+
+Or add to your project's `.mcp.json`:
+
+```json
+{
+  "mcpServers": {
+    "haszno": {
+      "command": "npx",
+      "args": ["-y", "github:haszno-labs/haszno-mcp"],
+      "env": {
+        "HASZNO_API_TOKEN": "haszno_xxxxxxxxxxxxxxxxxxxx"
+      }
+    }
+  }
+}
+```
+
+#### Connecting to Codex CLI
+
+Add to `~/.codex/config.toml` (Codex CLI uses TOML; the `[mcp_servers.<name>]` section configures a stdio server):
+
+```toml
+[mcp_servers.haszno]
+command = "npx"
+args = ["-y", "github:haszno-labs/haszno-mcp"]
+env = { HASZNO_API_TOKEN = "haszno_xxxxxxxxxxxxxxxxxxxx" }
+```
+
+The `command`/`args`/`env` keys are the official Codex CLI stdio transport fields (verified from the Codex CLI source, `mcp_types.rs`).
+
+---
+
 ### MCP Resources
 
 The server exposes one MCP resource that agents can read before calling any tool:

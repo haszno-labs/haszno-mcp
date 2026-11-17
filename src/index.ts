@@ -35,6 +35,7 @@ import { registerBlogTools } from './tools/blog.js'
 import { registerManagerTools } from './tools/manager.js'
 import { registerShopTools } from './tools/shop.js'
 import { registerModulesTools } from './tools/modules.js'
+import { registerBookingTools } from './tools/booking.js'
 
 /** Read flat config from ~/.config/haszno/config.json with ~/.config/arfutar fallback. */
 function readHasznoConfig(): { apiUrl?: string; apiKey?: string; basicAuth?: string } {
@@ -81,7 +82,7 @@ async function main() {
 
   const server = new McpServer({
     name: 'haszno',
-    version: '0.6.0',
+    version: '0.7.0',
   })
 
   // ── MCP capabilities resource ──────────────────────────────────────────────
@@ -103,6 +104,7 @@ async function main() {
           proposals: ['haszno_proposals_list', 'haszno_proposals_propose', 'haszno_proposals_market'],
           orders: ['haszno_orders_list', 'haszno_orders_get'],
           shop: ['haszno_shop_*'],
+          booking: ['haszno_booking_*'],
           notes: [
             'haszno_proposals_approve / reject / rollback are NOT available — requires human session',
             'haszno_auth_revoke_token revokes this token (irreversible)',
@@ -165,6 +167,7 @@ async function main() {
   registerManagerTools(server, client)
   registerShopTools(server, httpOpts)
   registerModulesTools(server, client)
+  registerBookingTools(server, client)
 
   const transport = new StdioServerTransport()
   await server.connect(transport)
