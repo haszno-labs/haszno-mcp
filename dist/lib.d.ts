@@ -1025,4 +1025,30 @@ declare function registerModulesTools(server: McpServer, client: HasznoClient): 
 
 declare function registerBookingTools(server: McpServer, client: HasznoClient): void;
 
-export { type HasznoClient, type HttpOptions, createClient, registerBookingTools, registerJobTools, registerModulesTools, registerShopTools };
+/**
+ * AsyncLocalStorage-based tool name context for the MCP server.
+ *
+ * Usage:
+ *   1. Call patchForToolContext(server) once after new McpServer() and before
+ *      any register*Tools() calls.
+ *   2. http.ts reads currentToolName() to populate the X-Haszno-Tool header.
+ *
+ * Works for both the stdio binary (src/index.ts) and the hosted library entry
+ * (src/lib.ts) because the patch happens at the McpServer instance level.
+ */
+
+interface ServerWithRegisterTool {
+    registerTool(name: string, schema: any, handler: (...args: any[]) => any, ...rest: any[]): unknown;
+}
+/**
+ * Patches server.registerTool so every registered handler runs inside
+ * toolNameStorage.run(toolName, handler), making the tool name available
+ * anywhere down the async call chain (including http.ts).
+ *
+ * Call once right after `new McpServer(...)`, before registering any tools.
+ * Safe to call multiple times — the patch is idempotent because it checks
+ * for the __toolContextPatched marker.
+ */
+declare function patchForToolContext(server: ServerWithRegisterTool): void;
+
+export { type HasznoClient, type HttpOptions, createClient, patchForToolContext, registerBookingTools, registerJobTools, registerModulesTools, registerShopTools };

@@ -19,6 +19,7 @@ import * as path from 'node:path'
 import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js'
 import { StdioServerTransport } from '@modelcontextprotocol/sdk/server/stdio.js'
 import { createClient } from './client/index.js'
+import { patchForToolContext } from './client/tool-context.js'
 
 import { registerCatalogTools } from './tools/catalog.js'
 import { registerProductsTools } from './tools/products.js'
@@ -84,6 +85,10 @@ async function main() {
     name: 'haszno',
     version: '0.7.0',
   })
+
+  // Patch registerTool so every handler runs inside the tool name context.
+  // This must be called before any register*Tools() so the patch is in place.
+  patchForToolContext(server)
 
   // ── MCP capabilities resource ──────────────────────────────────────────────
   // Tells agents which credential mode is active and which tools are usable.
