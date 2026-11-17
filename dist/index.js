@@ -295,6 +295,24 @@ function createShopTokenClient(opts) {
       activate: (moduleId) => post(`/api/shop/modules/${moduleId}/activate`, null, o),
       cancel: (moduleId) => post(`/api/shop/modules/${moduleId}/cancel`, null, o),
       resume: (moduleId) => post(`/api/shop/modules/${moduleId}/resume`, null, o)
+    },
+    // /api/agent/booking/* — booking module; Bearer haszno_… required
+    booking: {
+      getSetup: () => get("/api/agent/booking/setup", o),
+      applySetup: (body) => put("/api/agent/booking/setup", body, o),
+      setTheme: (body) => put("/api/agent/booking/theme", body, o),
+      listServices: () => get("/api/agent/booking/services", o),
+      createService: (body) => post("/api/agent/booking/services", body, o),
+      updateService: (id, body) => patch(`/api/agent/booking/services/${id}`, body, o),
+      deleteService: (id) => del(`/api/agent/booking/services/${id}`, o),
+      listResources: () => get("/api/agent/booking/resources", o),
+      createResource: (body) => post("/api/agent/booking/resources", body, o),
+      updateResource: (id, body) => patch(`/api/agent/booking/resources/${id}`, body, o),
+      deleteResource: (id) => del(`/api/agent/booking/resources/${id}`, o),
+      setHours: (body) => put("/api/agent/booking/hours", body, o),
+      addClosure: (body) => post("/api/agent/booking/exceptions", body, o),
+      publish: (body) => post("/api/agent/booking/publish", body, o),
+      listAppointments: (params) => get(`/api/agent/booking/appointments?from=${params.from}&to=${params.to}`, o)
     }
   };
 }
@@ -471,6 +489,25 @@ function createLegacyClient(opts) {
       activate: (moduleId) => post(`/api/shop/modules/${moduleId}/activate`, null, o),
       cancel: (moduleId) => post(`/api/shop/modules/${moduleId}/cancel`, null, o),
       resume: (moduleId) => post(`/api/shop/modules/${moduleId}/resume`, null, o)
+    },
+    // booking.* requires a shop token (haszno_…). All /api/agent/booking/* routes
+    // use requireBearerToken and do not accept x-api-key or Basic credentials.
+    booking: {
+      getSetup: notSupportedLegacy("booking.getSetup"),
+      applySetup: notSupportedLegacy("booking.applySetup"),
+      setTheme: notSupportedLegacy("booking.setTheme"),
+      listServices: notSupportedLegacy("booking.listServices"),
+      createService: notSupportedLegacy("booking.createService"),
+      updateService: notSupportedLegacy("booking.updateService"),
+      deleteService: notSupportedLegacy("booking.deleteService"),
+      listResources: notSupportedLegacy("booking.listResources"),
+      createResource: notSupportedLegacy("booking.createResource"),
+      updateResource: notSupportedLegacy("booking.updateResource"),
+      deleteResource: notSupportedLegacy("booking.deleteResource"),
+      setHours: notSupportedLegacy("booking.setHours"),
+      addClosure: notSupportedLegacy("booking.addClosure"),
+      publish: notSupportedLegacy("booking.publish"),
+      listAppointments: notSupportedLegacy("booking.listAppointments")
     }
   };
 }
@@ -4664,6 +4701,331 @@ function registerModulesTools(server, client) {
   );
 }
 
+// src/tools/booking.ts
+import { z as z17 } from "zod";
+var TimeRangeSchema = z17.object({
+  open: z17.string().describe('Opening time (HH:MM), e.g. "09:00".'),
+  close: z17.string().describe('Closing time (HH:MM), e.g. "17:00".')
+});
+var HoursMapSchema = z17.record(
+  z17.string(),
+  z17.union([z17.array(TimeRangeSchema), z17.null()])
+).describe(
+  'Weekly schedule keyed by day (mon, tue, wed, thu, fri, sat, sun). Each value is an array of {open, close} time ranges or null for a closed day. Example: { "mon": [{"open":"09:00","close":"17:00"}], "sat": null }'
+);
+var ServiceBodySchema = z17.object({
+  name: z17.string().describe('Service name, e.g. "Hajv\xE1g\xE1s". Used to match existing services.'),
+  durationMin: z17.number().int().positive().describe("Duration in minutes, e.g. 30."),
+  priceHuf: z17.number().int().nonnegative().optional().describe("Price in HUF (whole forints). 0 = free."),
+  description: z17.string().optional().describe("Short description shown to customers.")
+});
+var ResourceBodySchema = z17.object({
+  name: z17.string().describe('Resource name, e.g. "1-es sz\xE9k". Used to match existing resources.'),
+  description: z17.string().optional().describe('Optional note, e.g. "Ground floor, accessible".')
+});
+var ThemeBodySchema = z17.object({
+  accent: z17.string().optional().describe('Brand hex color, e.g. "#0ea5e9".'),
+  background: z17.enum(["light", "soft", "dark"]).optional().describe("Page background tone."),
+  radius: z17.enum(["sharp", "soft", "round"]).optional().describe("Button / card corner radius style."),
+  font: z17.enum(["inter", "serif", "rounded"]).optional().describe("Typography preset."),
+  logoUrl: z17.string().optional().describe("Full https:// URL for the shop logo image, or empty string to clear."),
+  coverUrl: z17.string().optional().describe("Full https:// URL for the page cover image, or empty string to clear."),
+  headline: z17.string().max(80).optional().describe("Short headline shown on the booking page (max 80 chars)."),
+  buttonLabel: z17.string().max(40).optional().describe('Call-to-action button label, e.g. "Foglalok" (max 40 chars).')
+});
+function registerBookingTools(server, client) {
+  server.registerTool(
+    "haszno_booking_get_setup",
+    {
+      title: "Get booking setup",
+      description: "Returns the full booking configuration for this shop: page settings, services, resources, weekly hours, closures, checklist (what is still missing), and nextStep hint. Call this first before any write operation so you understand the current state. Read-only. Requires a shop Bearer token (haszno_\u2026) with read scope.",
+      annotations: { readOnlyHint: true, openWorldHint: false },
+      inputSchema: {}
+    },
+    async () => {
+      const result = await client.booking.getSetup();
+      return {
+        content: [{ type: "text", text: JSON.stringify(result, null, 2) }]
+      };
+    }
+  );
+  server.registerTool(
+    "haszno_booking_apply_setup",
+    {
+      title: "Apply booking setup",
+      description: "Bulk-apply a booking setup in one call. RECOMMENDED WORKFLOW: (1) call haszno_booking_get_setup to see current state, (2) call this tool with dryRun:true to see what would change, (3) show the diff to the user and ask for confirmation, (4) call again with confirm:true to write. Either dryRun:true OR confirm:true is required (not both). Omitting both returns guidance without making any change. Requires write scope.",
+      annotations: { readOnlyHint: false, openWorldHint: false },
+      inputSchema: {
+        dryRun: z17.boolean().optional().describe("true = return a list of changes without writing (no confirm needed)."),
+        confirm: z17.literal(true).optional().describe("Must be exactly true to apply changes (required unless dryRun is true)."),
+        page: z17.object({
+          headline: z17.string().max(80).optional().describe("Page headline (max 80 chars)."),
+          published: z17.boolean().optional().describe("true = visible to customers; false = hidden.")
+        }).optional().describe("Page-level settings to update."),
+        services: z17.array(ServiceBodySchema).optional().describe(
+          "Services to create or update (matched by name). Services not in this list are left untouched."
+        ),
+        resources: z17.array(ResourceBodySchema).optional().describe(
+          "Resources to create or update (matched by name). Resources not in this list are left untouched."
+        ),
+        hours: HoursMapSchema.optional(),
+        theme: ThemeBodySchema.optional()
+      }
+    },
+    async (args) => {
+      if (!args.dryRun && args.confirm !== true) {
+        return {
+          content: [
+            {
+              type: "text",
+              text: JSON.stringify(
+                {
+                  guidance: "Pass dryRun:true to preview changes without writing, or confirm:true to apply. Recommended: preview first (dryRun), show the user, then confirm."
+                },
+                null,
+                2
+              )
+            }
+          ]
+        };
+      }
+      const { dryRun, confirm: _confirm, ...body } = args;
+      const result = await client.booking.applySetup({
+        dryRun: dryRun ?? false,
+        ...body
+      });
+      return {
+        content: [{ type: "text", text: JSON.stringify(result, null, 2) }]
+      };
+    }
+  );
+  server.registerTool(
+    "haszno_booking_set_theme",
+    {
+      title: "Set booking page theme",
+      description: "Partially update the visual theme of the booking page. Only the fields you pass are changed; omitted fields keep their current values. Theme contract: accent (hex), background (light/soft/dark), radius (sharp/soft/round), font (inter/serif/rounded), logoUrl, coverUrl, headline (80 chars), buttonLabel (40 chars). Requires write scope.",
+      annotations: { readOnlyHint: false, openWorldHint: false },
+      inputSchema: ThemeBodySchema.shape
+    },
+    async (args) => {
+      const result = await client.booking.setTheme(args);
+      return {
+        content: [{ type: "text", text: JSON.stringify(result, null, 2) }]
+      };
+    }
+  );
+  server.registerTool(
+    "haszno_booking_upsert_service",
+    {
+      title: "Upsert a booking service",
+      description: "Create or update a service. The service is matched by name: if a service with the same name already exists it is updated (PATCH); otherwise a new one is created (POST). Returns the created or updated service with its id. Requires write scope.",
+      annotations: { readOnlyHint: false, openWorldHint: false },
+      inputSchema: ServiceBodySchema.shape
+    },
+    async (args) => {
+      const services = await client.booking.listServices();
+      const existing = services.find((s) => s.name === args.name);
+      let result;
+      if (existing) {
+        result = await client.booking.updateService(existing.id, {
+          durationMin: args.durationMin,
+          ...args.priceHuf !== void 0 ? { priceHuf: args.priceHuf } : {},
+          ...args.description !== void 0 ? { description: args.description } : {}
+        });
+      } else {
+        result = await client.booking.createService({
+          name: args.name,
+          durationMin: args.durationMin,
+          ...args.priceHuf !== void 0 ? { priceHuf: args.priceHuf } : {},
+          ...args.description !== void 0 ? { description: args.description } : {}
+        });
+      }
+      return {
+        content: [
+          {
+            type: "text",
+            text: JSON.stringify(
+              { action: existing ? "updated" : "created", service: result },
+              null,
+              2
+            )
+          }
+        ]
+      };
+    }
+  );
+  server.registerTool(
+    "haszno_booking_delete_service",
+    {
+      title: "Delete a booking service",
+      description: "Soft-delete a service by its id. The service is hidden from the booking page but its appointment history is preserved. Use haszno_booking_get_setup to discover service ids before calling this. Requires confirm:true and write scope.",
+      annotations: { readOnlyHint: false, openWorldHint: false },
+      inputSchema: {
+        id: z17.number().int().positive().describe("Service id (from haszno_booking_get_setup or haszno_booking_upsert_service)."),
+        confirm: z17.literal(true).describe("Must be exactly true (safety gate).")
+      }
+    },
+    async (args) => {
+      if (args.confirm !== true) {
+        return {
+          content: [{ type: "text", text: "Confirm required: set confirm:true to delete the service." }]
+        };
+      }
+      const result = await client.booking.deleteService(args.id);
+      return {
+        content: [{ type: "text", text: JSON.stringify(result, null, 2) }]
+      };
+    }
+  );
+  server.registerTool(
+    "haszno_booking_upsert_resource",
+    {
+      title: "Upsert a booking resource",
+      description: "Create or update a bookable resource (a physical space, seat, or equipment slot). Matched by name: if a resource with the same name exists it is updated; otherwise created. Returns the created or updated resource with its id. Requires write scope.",
+      annotations: { readOnlyHint: false, openWorldHint: false },
+      inputSchema: ResourceBodySchema.shape
+    },
+    async (args) => {
+      const resources = await client.booking.listResources();
+      const existing = resources.find((r) => r.name === args.name);
+      let result;
+      if (existing) {
+        result = await client.booking.updateResource(existing.id, {
+          ...args.description !== void 0 ? { description: args.description } : {}
+        });
+      } else {
+        result = await client.booking.createResource({
+          name: args.name,
+          ...args.description !== void 0 ? { description: args.description } : {}
+        });
+      }
+      return {
+        content: [
+          {
+            type: "text",
+            text: JSON.stringify(
+              { action: existing ? "updated" : "created", resource: result },
+              null,
+              2
+            )
+          }
+        ]
+      };
+    }
+  );
+  server.registerTool(
+    "haszno_booking_delete_resource",
+    {
+      title: "Delete a booking resource",
+      description: "Soft-delete a bookable resource by its id. The resource is removed from future availability but history is preserved. Use haszno_booking_get_setup to discover resource ids. Requires confirm:true and write scope.",
+      annotations: { readOnlyHint: false, openWorldHint: false },
+      inputSchema: {
+        id: z17.number().int().positive().describe("Resource id (from haszno_booking_get_setup or haszno_booking_upsert_resource)."),
+        confirm: z17.literal(true).describe("Must be exactly true (safety gate).")
+      }
+    },
+    async (args) => {
+      if (args.confirm !== true) {
+        return {
+          content: [{ type: "text", text: "Confirm required: set confirm:true to delete the resource." }]
+        };
+      }
+      const result = await client.booking.deleteResource(args.id);
+      return {
+        content: [{ type: "text", text: JSON.stringify(result, null, 2) }]
+      };
+    }
+  );
+  server.registerTool(
+    "haszno_booking_set_hours",
+    {
+      title: "Set booking hours",
+      description: 'Replace the full weekly opening-hours schedule. The entire schedule is replaced \u2014 include all days you want configured. Days omitted from the map default to closed (null). Example: { "mon": [{"open":"09:00","close":"17:00"}], "wed": null, "sat": null }. Requires write scope.',
+      annotations: { readOnlyHint: false, openWorldHint: false },
+      inputSchema: {
+        hours: HoursMapSchema
+      }
+    },
+    async (args) => {
+      const result = await client.booking.setHours(args.hours);
+      return {
+        content: [{ type: "text", text: JSON.stringify(result, null, 2) }]
+      };
+    }
+  );
+  server.registerTool(
+    "haszno_booking_add_closure",
+    {
+      title: "Add a booking closure / exception",
+      description: "Add a date exception (closure or partial closure). For a full-day closure, omit startTime and endTime. For a partial closure, provide both startTime and endTime (HH:MM). Requires write scope.",
+      annotations: { readOnlyHint: false, openWorldHint: false },
+      inputSchema: {
+        date: z17.string().regex(/^\d{4}-\d{2}-\d{2}$/, "Must be YYYY-MM-DD").describe("Date of the closure (YYYY-MM-DD)."),
+        label: z17.string().optional().describe('Human-readable label, e.g. "Kar\xE1csonyi sz\xFCnet" or "Lunch break".'),
+        startTime: z17.string().optional().describe("Partial closure start (HH:MM). Omit for a full-day closure."),
+        endTime: z17.string().optional().describe("Partial closure end (HH:MM). Omit for a full-day closure.")
+      }
+    },
+    async (args) => {
+      const result = await client.booking.addClosure({
+        date: args.date,
+        ...args.label !== void 0 ? { label: args.label } : {},
+        ...args.startTime !== void 0 ? { startTime: args.startTime } : {},
+        ...args.endTime !== void 0 ? { endTime: args.endTime } : {}
+      });
+      return {
+        content: [{ type: "text", text: JSON.stringify(result, null, 2) }]
+      };
+    }
+  );
+  server.registerTool(
+    "haszno_booking_publish",
+    {
+      title: "Publish or unpublish the booking page",
+      description: "Publish (published:true) or unpublish (published:false) the booking page. Publishing fails with 422 if the checklist is incomplete (no services, no resources, or no hours). Call haszno_booking_get_setup first to verify the checklist before publishing. Requires confirm:true and write scope.",
+      annotations: { readOnlyHint: false, openWorldHint: false },
+      inputSchema: {
+        published: z17.boolean().describe("true = visible to customers; false = hidden draft."),
+        confirm: z17.literal(true).describe("Must be exactly true (safety gate).")
+      }
+    },
+    async (args) => {
+      if (args.confirm !== true) {
+        return {
+          content: [
+            {
+              type: "text",
+              text: "Confirm required: set confirm:true to publish or unpublish the booking page."
+            }
+          ]
+        };
+      }
+      const result = await client.booking.publish({ published: args.published });
+      return {
+        content: [{ type: "text", text: JSON.stringify(result, null, 2) }]
+      };
+    }
+  );
+  server.registerTool(
+    "haszno_booking_list_appointments",
+    {
+      title: "List booking appointments",
+      description: "List customer appointments for a date range. Both from and to are required (YYYY-MM-DD format, inclusive). Maximum range: 31 days. Returns appointment id, service, resource, customer, date/time, status, and notes. Read-only. Requires read scope.",
+      annotations: { readOnlyHint: true, openWorldHint: false },
+      inputSchema: {
+        from: z17.string().regex(/^\d{4}-\d{2}-\d{2}$/, "Must be YYYY-MM-DD").describe("Start date (YYYY-MM-DD, inclusive)."),
+        to: z17.string().regex(/^\d{4}-\d{2}-\d{2}$/, "Must be YYYY-MM-DD").describe("End date (YYYY-MM-DD, inclusive). Maximum 31 days after `from`.")
+      }
+    },
+    async (args) => {
+      const result = await client.booking.listAppointments({ from: args.from, to: args.to });
+      return {
+        content: [{ type: "text", text: JSON.stringify(result, null, 2) }]
+      };
+    }
+  );
+}
+
 // src/index.ts
 function readHasznoConfig() {
   const candidates = [
@@ -4697,7 +5059,7 @@ async function main() {
   const client = createClient(httpOpts);
   const server = new McpServer({
     name: "haszno",
-    version: "0.6.0"
+    version: "0.7.0"
   });
   const credMode = apiKey && apiKey.startsWith("haszno_") ? "shopToken" : apiKey ? "legacyKey" : basicAuth ? "basic" : "unauthenticated";
   const capabilityDoc = {
@@ -4710,6 +5072,7 @@ async function main() {
       proposals: ["haszno_proposals_list", "haszno_proposals_propose", "haszno_proposals_market"],
       orders: ["haszno_orders_list", "haszno_orders_get"],
       shop: ["haszno_shop_*"],
+      booking: ["haszno_booking_*"],
       notes: [
         "haszno_proposals_approve / reject / rollback are NOT available \u2014 requires human session",
         "haszno_auth_revoke_token revokes this token (irreversible)",
@@ -4766,6 +5129,7 @@ async function main() {
   registerManagerTools(server, client);
   registerShopTools(server, httpOpts);
   registerModulesTools(server, client);
+  registerBookingTools(server, client);
   const transport = new StdioServerTransport();
   await server.connect(transport);
 }

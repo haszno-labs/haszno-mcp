@@ -581,6 +581,16 @@ interface ModuleActivateResult {
  *   const products = await client.products.list()
  */
 
+/** A booking service item (at minimum has id and name). */
+interface BookingServiceItem {
+    id: number;
+    name: string;
+}
+/** A booking resource item (at minimum has id and name). */
+interface BookingResourceItem {
+    id: number;
+    name: string;
+}
 /**
  * Body for POST /api/agent/proposals.
  * The nonce must be generated once per user action (crypto.randomUUID()) and
@@ -909,6 +919,50 @@ interface HasznoClient {
             status: string;
         }>;
     };
+    /**
+     * Booking module configuration — all routes call /api/agent/booking/*.
+     * Require a shop Bearer token (haszno_…). Read methods need read scope; write methods need write scope.
+     * Not available with a legacy API key: all methods throw LegacyKeyNotSupportedError.
+     */
+    booking: {
+        /** GET /api/agent/booking/setup — full config: page, services, resources, hours, checklist, nextStep */
+        getSetup(): Promise<unknown>;
+        /** PUT /api/agent/booking/setup — bulk apply; dryRun:true returns change list without writing */
+        applySetup(body: {
+            dryRun?: boolean;
+        } & Record<string, unknown>): Promise<unknown>;
+        /** PUT /api/agent/booking/theme — partial theme update */
+        setTheme(body: Record<string, unknown>): Promise<unknown>;
+        /** GET /api/agent/booking/services — list active services */
+        listServices(): Promise<BookingServiceItem[]>;
+        /** POST /api/agent/booking/services — create a service */
+        createService(body: Record<string, unknown>): Promise<BookingServiceItem>;
+        /** PATCH /api/agent/booking/services/:id — update a service */
+        updateService(id: number, body: Record<string, unknown>): Promise<BookingServiceItem>;
+        /** DELETE /api/agent/booking/services/:id — soft-delete a service */
+        deleteService(id: number): Promise<unknown>;
+        /** GET /api/agent/booking/resources — list active resources */
+        listResources(): Promise<BookingResourceItem[]>;
+        /** POST /api/agent/booking/resources — create a resource */
+        createResource(body: Record<string, unknown>): Promise<BookingResourceItem>;
+        /** PATCH /api/agent/booking/resources/:id — update a resource */
+        updateResource(id: number, body: Record<string, unknown>): Promise<BookingResourceItem>;
+        /** DELETE /api/agent/booking/resources/:id — soft-delete a resource */
+        deleteResource(id: number): Promise<unknown>;
+        /** PUT /api/agent/booking/hours — replace full weekly schedule */
+        setHours(body: Record<string, unknown>): Promise<unknown>;
+        /** POST /api/agent/booking/exceptions — add a date exception / closure */
+        addClosure(body: Record<string, unknown>): Promise<unknown>;
+        /** POST /api/agent/booking/publish — publish or unpublish the booking page */
+        publish(body: {
+            published: boolean;
+        }): Promise<unknown>;
+        /** GET /api/agent/booking/appointments?from=…&to=… — list appointments */
+        listAppointments(params: {
+            from: string;
+            to: string;
+        }): Promise<unknown>;
+    };
 }
 declare function createClient(opts?: HttpOptions): HasznoClient;
 
@@ -939,4 +993,36 @@ declare function createClient(opts?: HttpOptions): HasznoClient;
 
 declare function registerModulesTools(server: McpServer, client: HasznoClient): void;
 
-export { type HasznoClient, type HttpOptions, createClient, registerJobTools, registerModulesTools, registerShopTools };
+/**
+ * MCP tools — Időpontfoglalás / Booking (booking module configuration).
+ *
+ * Domain: booking
+ * Tools:
+ *   haszno_booking_get_setup        — read current booking config (page, services, resources, hours, checklist)
+ *   haszno_booking_apply_setup      — bulk-apply setup; dryRun returns a change-list; confirm:true writes
+ *   haszno_booking_set_theme        — partial theme update (accent, background, radius, font, logo, cover, headline, button)
+ *   haszno_booking_upsert_service   — create or update a service (GET-then-match-by-name)
+ *   haszno_booking_delete_service   — soft-delete a service by id (confirm required)
+ *   haszno_booking_upsert_resource  — create or update a resource (GET-then-match-by-name)
+ *   haszno_booking_delete_resource  — soft-delete a resource by id (confirm required)
+ *   haszno_booking_set_hours        — replace the full weekly schedule
+ *   haszno_booking_add_closure      — add a date exception / closure
+ *   haszno_booking_publish          — publish or unpublish the booking page (confirm required; 422 if incomplete)
+ *   haszno_booking_list_appointments — list appointments for a date range (from+to required, max 31 days)
+ *
+ * Auth model (all tools):
+ *   Requires a shop Bearer token (haszno_…). Read tools require read scope;
+ *   write tools require write scope. Legacy API keys are not supported — all booking
+ *   operations call /api/agent/booking/* which require Authorization: Bearer.
+ *
+ * Recommended workflow for a new booking setup:
+ *   1. haszno_booking_get_setup              — inspect current state + checklist
+ *   2. haszno_booking_apply_setup dryRun:true — preview what changes will be made
+ *   3. Show the preview to the user and confirm
+ *   4. haszno_booking_apply_setup confirm:true — apply the changes
+ *   5. haszno_booking_publish confirm:true     — go live (only after services+resources+hours are set)
+ */
+
+declare function registerBookingTools(server: McpServer, client: HasznoClient): void;
+
+export { type HasznoClient, type HttpOptions, createClient, registerBookingTools, registerJobTools, registerModulesTools, registerShopTools };
