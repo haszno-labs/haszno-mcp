@@ -4591,13 +4591,15 @@ function registerModulesTools(server, client) {
       }
       const result = await client.modules.activate(args.moduleId);
       const lines = [`Module: ${args.moduleId}`, `Status: ${result.status}`];
-      if (result.checkoutUrl) {
-        lines.push(`Checkout URL: ${result.checkoutUrl}`);
+      if (result.checkout?.redirectUrl) {
+        lines.push(`Checkout URL: ${result.checkout.redirectUrl}`);
+        lines.push(`Order ref: ${result.checkout.orderRef}`);
+        lines.push(`Amount: ${result.checkout.amountHuf} HUF`);
         lines.push(
           "The user must visit the checkout URL to complete payment. The module will not be active until payment succeeds."
         );
-      } else {
-        lines.push("Module activated immediately (free module, no payment required).");
+      } else if (result.status === "active") {
+        lines.push(result.message ?? "Module activated immediately (free module, no payment required).");
       }
       return {
         content: [{ type: "text", text: lines.join("\n") }]
