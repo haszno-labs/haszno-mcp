@@ -1,13 +1,13 @@
 {
   "name": "@haszno/mcp",
-  "version": "0.6.0",
+  "version": "0.7.0",
   "description": "MCP server for the Haszno API (stdio transport) — also importable as a library via @haszno/mcp/lib",
   "license": "MIT",
   "type": "module",
   "main": "./dist/index.js",
   "types": "./dist/index.d.ts",
   "bin": {
-    "haszno-mcp": "./dist/index.js"
+    "haszno-mcp": "dist/index.js"
   },
   "exports": {
     ".": {
@@ -30,7 +30,7 @@
   ],
   "repository": {
     "type": "git",
-    "url": "https://github.com/haszno-labs/haszno-mcp"
+    "url": "git+https://github.com/haszno-labs/haszno-mcp.git"
   },
   "scripts": {
     "build": "tsup",
