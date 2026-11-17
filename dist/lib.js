@@ -26,6 +26,39 @@ var HasznoApiError = class extends Error {
   requestId;
 };
 
+// src/client/tool-context.ts
+import { AsyncLocalStorage } from "async_hooks";
+var toolNameStorage = new AsyncLocalStorage();
+var TOOL_HEADER_RE = /^[a-zA-Z0-9_.:\- ]{1,80}$/;
+function currentToolName() {
+  const name = toolNameStorage.getStore();
+  if (name !== void 0 && TOOL_HEADER_RE.test(name)) return name;
+  return void 0;
+}
+function patchForToolContext(server) {
+  if (server.__toolContextPatched) return;
+  const original = server.registerTool.bind(server);
+  server.registerTool = function(name, schema, handler, ...rest) {
+    const wrapped = (...args) => toolNameStorage.run(name, () => handler(...args));
+    return original(name, schema, wrapped, ...rest);
+  };
+  const withTool = server;
+  if (typeof withTool.tool === "function") {
+    const originalTool = withTool.tool.bind(server);
+    withTool.tool = (...args) => {
+      const name = args[0];
+      const handler = args[args.length - 1];
+      if (typeof name === "string" && typeof handler === "function") {
+        const fn = handler;
+        args[args.length - 1] = (...a) => toolNameStorage.run(name, () => fn(...a));
+      }
+      return originalTool(...args);
+    };
+  }
+  ;
+  server.__toolContextPatched = true;
+}
+
 // src/client/http.ts
 var SHOP_TOKEN_PREFIX = "haszno_";
 function isShopToken(key) {
@@ -54,11 +87,13 @@ async function request(method, path2, body, opts) {
   const maxRetries = opts.maxRetries ?? 3;
   const retryDelayMs = opts.retryDelayMs ?? 500;
   const timeoutMs = opts.timeoutMs ?? 3e4;
+  const toolName = currentToolName();
   const headers = {
     "Content-Type": "application/json",
     "Accept": "application/json",
     "User-Agent": "haszno-mcp/0.6.0",
-    ...buildAuthHeader(opts)
+    ...buildAuthHeader(opts),
+    ...toolName ? { "X-Haszno-Tool": toolName } : {}
   };
   let lastError;
   for (let attempt = 0; attempt < maxRetries; attempt++) {
@@ -2435,6 +2470,7 @@ function createLegacyClient(opts) {
 }
 export {
   createClient,
+  patchForToolContext,
   registerJobTools,
   registerModulesTools,
   registerShopTools

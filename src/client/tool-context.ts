@@ -61,5 +61,19 @@ export function patchForToolContext(server: ServerWithRegisterTool): void {
       toolNameStorage.run(name, () => handler(...args))
     return original(name, schema, wrapped, ...rest)
   }
+  // server.tool(name, ...variants, handler): the handler is always the last argument.
+  const withTool = server as unknown as { tool?: (...args: unknown[]) => unknown }
+  if (typeof withTool.tool === 'function') {
+    const originalTool = withTool.tool.bind(server)
+    withTool.tool = (...args: unknown[]): unknown => {
+      const name = args[0]
+      const handler = args[args.length - 1]
+      if (typeof name === 'string' && typeof handler === 'function') {
+        const fn = handler as (...a: unknown[]) => unknown
+        args[args.length - 1] = (...a: unknown[]) => toolNameStorage.run(name, () => fn(...a))
+      }
+      return originalTool(...args)
+    }
+  }
   ;(server as { __toolContextPatched?: boolean }).__toolContextPatched = true
 }

@@ -87,6 +87,24 @@ describe('patchForToolContext', () => {
     expect(currentToolName()).toBeUndefined()
   })
 
+  it('also wraps handlers registered through server.tool()', async () => {
+    type Cb = (args: Record<string, unknown>) => Promise<unknown>
+    const tools = new Map<string, Cb>()
+    const server = {
+      registerTool(_name: string, _schema: unknown, _cb: Cb) {},
+      tool(...args: unknown[]) {
+        tools.set(args[0] as string, args[args.length - 1] as Cb)
+      },
+    }
+    patchForToolContext(server)
+    let seen: string | undefined
+    server.tool('haszno_legacy_tool', 'description', {}, async () => {
+      seen = currentToolName()
+    })
+    await tools.get('haszno_legacy_tool')!({})
+    expect(seen).toBe('haszno_legacy_tool')
+  })
+
   it('is idempotent — double-patching does not double-wrap', async () => {
     let callCount = 0
     type Cb = (args: Record<string, unknown>) => Promise<unknown>
