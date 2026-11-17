@@ -1931,8 +1931,512 @@ markupPct: 0\u2013100 (percentage markup on the ad's asking price). markupFt: 0\
   );
   registerJobTools(server, opts, flags);
 }
+
+// src/tools/modules.ts
+import { z as z3 } from "zod";
+var MODULE_IDS = [
+  "webshop",
+  "dropshipping_supplier",
+  "fitness",
+  "booking_salon",
+  "booking_clinic",
+  "booking_other",
+  "restaurant"
+];
+function registerModulesTools(server, client) {
+  server.registerTool(
+    "haszno_modules_list_prices",
+    {
+      title: "Module price list",
+      description: "Returns the public price-list for all Haszno workspace modules: module id, monthly price in HUF, and whether it is billable (requires payment). Free modules (webshop, dropshipping_supplier, restaurant) have priceHuf = 0. No authentication required.",
+      annotations: { readOnlyHint: true, openWorldHint: false },
+      inputSchema: {}
+    },
+    async () => {
+      const result = await client.modules.listPrices();
+      return {
+        content: [
+          {
+            type: "text",
+            text: JSON.stringify(result, null, 2)
+          }
+        ]
+      };
+    }
+  );
+  server.registerTool(
+    "haszno_modules_list_my",
+    {
+      title: "My active modules",
+      description: "Returns the workspace modules currently active (or pending activation) for this shop. Shows module id, subscription status (pending/active/cancelled/ended), billing period, and expiry. Requires a shop Bearer token (haszno_\u2026).",
+      annotations: { readOnlyHint: true, openWorldHint: false },
+      inputSchema: {}
+    },
+    async () => {
+      const result = await client.modules.listMy();
+      return {
+        content: [
+          {
+            type: "text",
+            text: JSON.stringify(result, null, 2)
+          }
+        ]
+      };
+    }
+  );
+  server.registerTool(
+    "haszno_modules_activate",
+    {
+      title: "Activate a module",
+      description: "Starts the activation flow for a Haszno workspace module. For free modules (webshop, dropshipping_supplier, restaurant) this activates immediately. For billable modules (fitness, booking_salon, booking_clinic, booking_other) it returns a checkoutUrl that the user must visit to complete the payment. IMPORTANT: If a checkoutUrl is returned, tell the user to open it and complete payment \u2014 do NOT report the module as active until payment is confirmed. Requires confirm: true (safety gate). Requires a write-scope shop Bearer token (haszno_\u2026) with ownership (tulajdonos) role.",
+      annotations: { readOnlyHint: false, openWorldHint: false },
+      inputSchema: {
+        moduleId: z3.enum(MODULE_IDS).describe("The module to activate."),
+        confirm: z3.literal(true).describe(
+          "Must be exactly true. This may start a real payment flow \u2014 only set after the user confirms."
+        )
+      }
+    },
+    async (args) => {
+      if (args.confirm !== true) {
+        return {
+          content: [
+            {
+              type: "text",
+              text: "Confirm required: set confirm: true after the user has acknowledged this may trigger a payment."
+            }
+          ]
+        };
+      }
+      const result = await client.modules.activate(args.moduleId);
+      const lines = [`Module: ${args.moduleId}`, `Status: ${result.status}`];
+      if (result.checkout?.redirectUrl) {
+        lines.push(`Checkout URL: ${result.checkout.redirectUrl}`);
+        lines.push(`Order ref: ${result.checkout.orderRef}`);
+        lines.push(`Amount: ${result.checkout.amountHuf} HUF`);
+        lines.push(
+          "The user must visit the checkout URL to complete payment. The module will not be active until payment succeeds."
+        );
+      } else if (result.status === "active") {
+        lines.push(result.message ?? "Module activated immediately (free module, no payment required).");
+      }
+      return {
+        content: [{ type: "text", text: lines.join("\n") }]
+      };
+    }
+  );
+  server.registerTool(
+    "haszno_modules_cancel",
+    {
+      title: "Cancel a module subscription",
+      description: "Cancels a currently-active module subscription. The module remains accessible until the end of the current paid period (not an immediate shutdown). Requires confirm: true. Requires ownership (tulajdonos) role.",
+      annotations: { readOnlyHint: false, openWorldHint: false },
+      inputSchema: {
+        moduleId: z3.enum(MODULE_IDS).describe("The module to cancel."),
+        confirm: z3.literal(true).describe("Must be exactly true (safety gate).")
+      }
+    },
+    async (args) => {
+      if (args.confirm !== true) {
+        return {
+          content: [{ type: "text", text: "Confirm required: set confirm: true to cancel the module." }]
+        };
+      }
+      const result = await client.modules.cancel(args.moduleId);
+      return {
+        content: [
+          {
+            type: "text",
+            text: JSON.stringify(result, null, 2)
+          }
+        ]
+      };
+    }
+  );
+  server.registerTool(
+    "haszno_modules_resume",
+    {
+      title: "Resume a cancelled module",
+      description: "Resumes a module subscription that was cancelled but has not yet expired. Has no effect if the module is already active or if the period has already ended. Requires confirm: true. Requires ownership (tulajdonos) role.",
+      annotations: { readOnlyHint: false, openWorldHint: false },
+      inputSchema: {
+        moduleId: z3.enum(MODULE_IDS).describe("The module to resume."),
+        confirm: z3.literal(true).describe("Must be exactly true (safety gate).")
+      }
+    },
+    async (args) => {
+      if (args.confirm !== true) {
+        return {
+          content: [{ type: "text", text: "Confirm required: set confirm: true to resume the module." }]
+        };
+      }
+      const result = await client.modules.resume(args.moduleId);
+      return {
+        content: [
+          {
+            type: "text",
+            text: JSON.stringify(result, null, 2)
+          }
+        ]
+      };
+    }
+  );
+}
+
+// src/client/index.ts
+var ShopTokenNotSupportedError = class extends Error {
+  isShopTokenNotSupported = true;
+  operation;
+  constructor(operation) {
+    super(
+      `"${operation}" nem \xE9rhet\u0151 el bolt API-tokennel \u2014 haszn\xE1lja a Haszno webalkalmaz\xE1st (https://haszno.com). Az \xFCgyn\xF6k-token csak olvas\xE1si (GET /api/agent/*) \xE9s javaslat-bek\xFCld\xE9si (POST /api/agent/proposals) m\u0171veletekre jogosult.`
+    );
+    this.name = "ShopTokenNotSupportedError";
+    this.operation = operation;
+  }
+};
+var LegacyKeyNotSupportedError = class extends Error {
+  isLegacyKeyNotSupported = true;
+  operation;
+  constructor(operation) {
+    super(
+      `"${operation}" csak bolt API-tokennel (haszno_\u2026) \xE9rhet\u0151 el \u2014 a Napi jelent\xE9s \xE9s agent-eszk\xF6z\xF6k nem m\u0171k\xF6dnek sima API-kulccsal. Hozzon l\xE9tre bolt API-tokent itt: /app/api-kulcsok (Haszno webalkalmaz\xE1s). Shop token required: create one at /app/api-kulcsok in the Haszno web app.`
+    );
+    this.name = "LegacyKeyNotSupportedError";
+    this.operation = operation;
+  }
+};
+function detectShopToken(opts) {
+  const key = opts.apiKey ?? process.env["HASZNO_API_TOKEN"] ?? process.env["HASZNO_API_KEY"] ?? process.env["ARFUTAR_API_KEY"];
+  return isShopToken(key) ? key : void 0;
+}
+function notSupported(op) {
+  return (..._args) => {
+    return Promise.reject(new ShopTokenNotSupportedError(op));
+  };
+}
+function notSupportedLegacy(op) {
+  return (..._args) => {
+    return Promise.reject(new LegacyKeyNotSupportedError(op));
+  };
+}
+function createClient(opts = {}) {
+  const shopToken = detectShopToken(opts);
+  if (shopToken) {
+    return createShopTokenClient({ ...opts, apiKey: shopToken });
+  }
+  return createLegacyClient(opts);
+}
+function createShopTokenClient(opts) {
+  const o = opts;
+  return {
+    health: {
+      check: () => get("/api/health", o)
+    },
+    auth: {
+      me: () => get("/api/v1/auth/me", o),
+      revokeCurrentToken: () => post("/api/v1/auth/tokens/revoke-current", null, o)
+    },
+    // settings.get is not on the agent API — blocked
+    settings: {
+      get: notSupported("settings.get"),
+      update: notSupported("settings.update")
+    },
+    // /api/agent/products — shop-scoped, no purchase cost
+    products: {
+      list: (_params) => get("/api/agent/products", o),
+      update: notSupported("products.update"),
+      setListing: notSupported("products.setListing"),
+      generateAiDescription: notSupported("products.generateAiDescription"),
+      applyPrices: notSupported("products.applyPrices")
+    },
+    stats: {
+      get: notSupported("stats.get"),
+      getImpact: notSupported("stats.getImpact")
+    },
+    suppliers: {
+      list: notSupported("suppliers.list")
+    },
+    feeds: {
+      importFeed: notSupported("feeds.importFeed"),
+      importMarketPrices: notSupported("feeds.importMarketPrices")
+    },
+    // /api/agent/orders — last 20 orders, shop-scoped
+    orders: {
+      list: () => get("/api/agent/orders", o),
+      receiveOrder: notSupported("orders.receiveOrder"),
+      ship: notSupported("orders.ship"),
+      createDemo: notSupported("orders.createDemo")
+    },
+    recommendations: {
+      get: notSupported("recommendations.get"),
+      getAiShortlist: notSupported("recommendations.getAiShortlist"),
+      fillTrendKeywords: notSupported("recommendations.fillTrendKeywords")
+    },
+    rules: {
+      listTemplates: notSupported("rules.listTemplates"),
+      list: notSupported("rules.list"),
+      create: notSupported("rules.create"),
+      update: notSupported("rules.update"),
+      delete: notSupported("rules.delete"),
+      run: notSupported("rules.run"),
+      runAll: notSupported("rules.runAll"),
+      trigger: notSupported("rules.trigger"),
+      listRuns: notSupported("rules.listRuns"),
+      undoUnlists: notSupported("rules.undoUnlists")
+    },
+    proposals: {
+      // /api/agent/proposals — returns pending proposals for this shop
+      list: (_params) => get("/api/agent/proposals", o),
+      // approve/reject/rollback are human-only — blocked for agent tokens
+      approve: notSupported("proposals.approve"),
+      reject: notSupported("proposals.reject"),
+      rollback: notSupported("proposals.rollback"),
+      // POST /api/agent/proposals — submit a price-change proposal for human review
+      propose: (body) => post("/api/agent/proposals", body, o)
+    },
+    automation: {
+      get: notSupported("automation.get"),
+      set: notSupported("automation.set")
+    },
+    network: {
+      listSuppliers: notSupported("network.listSuppliers"),
+      getSupplierProducts: notSupported("network.getSupplierProducts"),
+      connect: notSupported("network.connect"),
+      disconnect: notSupported("network.disconnect"),
+      sync: notSupported("network.sync"),
+      getSupplierView: notSupported("network.getSupplierView")
+    },
+    catalogue: {
+      search: notSupported("catalogue.search")
+    },
+    importList: {
+      list: notSupported("importList.list"),
+      add: notSupported("importList.add"),
+      push: notSupported("importList.push")
+    },
+    connections: {
+      list: notSupported("connections.list"),
+      get: notSupported("connections.get")
+    },
+    peers: {
+      createInvite: notSupported("peers.createInvite"),
+      listInvites: notSupported("peers.listInvites"),
+      revokeInvite: notSupported("peers.revokeInvite"),
+      acceptInvite: notSupported("peers.acceptInvite"),
+      listLinks: notSupported("peers.listLinks"),
+      removeLink: notSupported("peers.removeLink"),
+      setVisibility: notSupported("peers.setVisibility")
+    },
+    blog: {
+      list: notSupported("blog.list"),
+      get: notSupported("blog.get")
+    },
+    manager: {
+      listReports: () => get("/api/daily-reports", o),
+      getReport: (day) => day === "latest" ? get("/api/agent/daily-report", o) : get(`/api/agent/daily-report/${day}`, o),
+      getResearchBrief: () => get("/api/agent/research-brief", o),
+      postFindings: (day, body) => post(`/api/agent/daily-report/${day}/findings`, body, o),
+      listActions: (params) => {
+        const qs = new URLSearchParams();
+        if (params?.status) qs.set("status", params.status);
+        if (params?.limit != null) qs.set("limit", String(params.limit));
+        const suffix = qs.toString() ? `?${qs.toString()}` : "";
+        return get(`/api/agent/actions${suffix}`, o);
+      },
+      proposeAction: (body) => post("/api/agent/actions", body, o),
+      rejectAction: (id) => post(`/api/agent/actions/${id}/reject`, null, o)
+    },
+    // /api/shop/modules/* — available in shop token mode (Bearer haszno_…)
+    modules: {
+      listPrices: () => get("/api/shop/modules/prices", o),
+      listMy: () => get("/api/shop/modules/my", o),
+      activate: (moduleId) => post(`/api/shop/modules/${moduleId}/activate`, null, o),
+      cancel: (moduleId) => post(`/api/shop/modules/${moduleId}/cancel`, null, o),
+      resume: (moduleId) => post(`/api/shop/modules/${moduleId}/resume`, null, o)
+    }
+  };
+}
+function createLegacyClient(opts) {
+  const o = opts;
+  return {
+    health: {
+      check: () => get("/api/health", o)
+    },
+    auth: {
+      me: () => get("/api/v1/auth/me", o),
+      revokeCurrentToken: () => post("/api/v1/auth/tokens/revoke-current", null, o)
+    },
+    settings: {
+      get: () => get("/api/settings", o),
+      update: (body) => put("/api/settings", body, o)
+    },
+    products: {
+      list: (params) => {
+        const qs = params?.all ? "?all=1" : "";
+        return get(`/api/products${qs}`, o);
+      },
+      update: (id, body) => patch(`/api/products/${id}`, body, o),
+      setListing: (id, body) => post(`/api/products/${id}/listing`, body, o),
+      generateAiDescription: (id) => post(`/api/products/${id}/ai-description`, null, o),
+      applyPrices: (body) => post("/api/products/apply-prices", body ?? {}, o)
+    },
+    stats: {
+      get: () => get("/api/stats", o),
+      getImpact: (params) => {
+        const qs = params?.days != null ? `?days=${params.days}` : "";
+        return get(`/api/impact${qs}`, o);
+      }
+    },
+    suppliers: {
+      list: () => get("/api/suppliers", o)
+    },
+    feeds: {
+      importFeed: (body) => post("/api/feeds/import", body, o),
+      importMarketPrices: (body) => post("/api/market-prices/import", body, o)
+    },
+    orders: {
+      list: () => get("/api/orders", o),
+      receiveOrder: (body) => post("/api/webhooks/order", body, o),
+      ship: (id) => post(`/api/orders/${id}/ship`, null, o),
+      createDemo: () => post("/api/demo/order", null, o)
+    },
+    recommendations: {
+      get: () => get("/api/recommendations", o),
+      getAiShortlist: () => post("/api/recommendations/ai", null, o),
+      fillTrendKeywords: () => post("/api/trends/keywords", null, o)
+    },
+    rules: {
+      listTemplates: () => get("/api/rules/templates", o),
+      list: () => get("/api/rules", o),
+      create: (body) => post("/api/rules", body, o),
+      update: (id, body) => patch(`/api/rules/${id}`, body, o),
+      delete: (id) => del(`/api/rules/${id}`, o),
+      run: (id) => post(`/api/rules/${id}/run`, null, o),
+      runAll: () => post("/api/rules/run-all", null, o),
+      trigger: (body) => post("/api/rules/trigger", body, o),
+      listRuns: (params) => {
+        const qs = params?.limit != null ? `?limit=${params.limit}` : "";
+        return get(`/api/rule-runs${qs}`, o);
+      },
+      undoUnlists: (body) => post("/api/rule-runs/undo", body, o)
+    },
+    proposals: {
+      list: (params) => {
+        const qs = params?.status ? `?status=${params.status}` : "";
+        return get(`/api/proposals${qs}`, o);
+      },
+      approve: (body) => post("/api/proposals/approve", body ?? {}, o),
+      reject: (body) => post("/api/proposals/reject", body, o),
+      rollback: (body) => post("/api/proposals/rollback", body, o),
+      // Legacy mode: no agent propose endpoint; not applicable outside shop-token mode
+      propose: notSupported("proposals.propose (requires a shop API token)")
+    },
+    automation: {
+      get: () => get("/api/automation", o),
+      set: (body) => put("/api/automation", body, o)
+    },
+    network: {
+      listSuppliers: () => get("/api/network/suppliers", o),
+      getSupplierProducts: (id) => get(`/api/network/suppliers/${id}/products`, o),
+      connect: (id) => post(`/api/network/suppliers/${id}/connect`, null, o),
+      disconnect: (id) => post(`/api/network/suppliers/${id}/disconnect`, null, o),
+      sync: (id) => post(`/api/network/suppliers/${id}/sync`, null, o),
+      getSupplierView: (supplierId) => get(`/api/network/supplier-view/${supplierId}`, o)
+    },
+    catalogue: {
+      search: (params) => {
+        const qs = new URLSearchParams();
+        if (params.q) qs.set("q", params.q);
+        if (params.cats) qs.set("cats", params.cats);
+        if (params.partner != null) qs.set("partner", String(params.partner));
+        if (params.minMarginPct != null) qs.set("minMarginPct", String(params.minMarginPct));
+        if (params.maxPrice != null) qs.set("maxPrice", String(params.maxPrice));
+        if (params.minPrice != null) qs.set("minPrice", String(params.minPrice));
+        if (params.inStock) qs.set("inStock", "1");
+        if (params.hasImage) qs.set("hasImage", "1");
+        if (params.country) qs.set("country", params.country);
+        if (params.sort) qs.set("sort", params.sort);
+        if (params.page != null) qs.set("page", String(params.page));
+        if (params.pageSize != null) qs.set("pageSize", String(params.pageSize));
+        const suffix = qs.toString() ? `?${qs.toString()}` : "";
+        return get(`/api/catalogue/products${suffix}`, o);
+      }
+    },
+    importList: {
+      list: (params) => {
+        const qs = new URLSearchParams();
+        if (params?.status) qs.set("status", params.status);
+        if (params?.partner != null) qs.set("partner", String(params.partner));
+        if (params?.q) qs.set("q", params.q);
+        const suffix = qs.toString() ? `?${qs.toString()}` : "";
+        return get(`/api/import-list${suffix}`, o);
+      },
+      add: (body) => post("/api/import-list", body, o),
+      // Routes to the correct endpoint depending on whether a target connection is given.
+      push: ((body) => {
+        if (body.targetConnectionId != null) {
+          return post(
+            `/api/connect/stores/${body.targetConnectionId}/push`,
+            { importListIds: body.ids },
+            o
+          );
+        }
+        return post("/api/import-list/push", { ids: body.ids }, o);
+      })
+    },
+    connections: {
+      list: () => get("/api/connect/stores", o),
+      get: (id) => get(`/api/connect/stores/${id}`, o)
+    },
+    peers: {
+      createInvite: (body) => post("/api/peers/invites", body, o),
+      listInvites: () => get("/api/peers/invites", o),
+      revokeInvite: (code) => del(`/api/peers/invites/${code}`, o),
+      acceptInvite: (code, body) => post(`/api/peers/invites/${code}/accept`, body, o),
+      listLinks: () => get("/api/peers/links", o),
+      removeLink: (id) => del(`/api/peers/links/${id}`, o),
+      setVisibility: (id, body) => put(`/api/peers/suppliers/${id}/visibility`, body, o)
+    },
+    blog: {
+      list: (params) => {
+        const qs = new URLSearchParams();
+        if (params?.period) qs.set("period", params.period);
+        if (params?.page != null) qs.set("page", String(params.page));
+        if (params?.perPage != null) qs.set("perPage", String(params.perPage));
+        const suffix = qs.toString() ? `?${qs.toString()}` : "";
+        return get(`/api/blog${suffix}`, o);
+      },
+      get: (slug) => get(`/api/blog/${slug}`, o)
+    },
+    // manager.* requires a shop token (haszno_…). In legacy mode these endpoints
+    // either return synthetic demo data (GET /api/agent/actions → HTTP 200 with
+    // fake rows) or 401. Both outcomes are wrong for a production agent.
+    manager: {
+      listReports: notSupportedLegacy("manager.listReports"),
+      getReport: notSupportedLegacy("manager.getReport"),
+      getResearchBrief: notSupportedLegacy("manager.getResearchBrief"),
+      postFindings: notSupportedLegacy("manager.postFindings"),
+      listActions: notSupportedLegacy("manager.listActions"),
+      proposeAction: notSupportedLegacy("manager.proposeAction"),
+      rejectAction: notSupportedLegacy("manager.rejectAction")
+    },
+    // modules.listPrices is public; modules.listMy + write ops require Bearer.
+    // In legacy key mode (x-api-key) the shop/modules/* routes require a session
+    // or Bearer token, so only listPrices works; write ops and listMy fail with 401.
+    modules: {
+      listPrices: () => get("/api/shop/modules/prices", o),
+      listMy: () => get("/api/shop/modules/my", o),
+      activate: (moduleId) => post(`/api/shop/modules/${moduleId}/activate`, null, o),
+      cancel: (moduleId) => post(`/api/shop/modules/${moduleId}/cancel`, null, o),
+      resume: (moduleId) => post(`/api/shop/modules/${moduleId}/resume`, null, o)
+    }
+  };
+}
 export {
+  createClient,
   registerJobTools,
+  registerModulesTools,
   registerShopTools
 };
 //# sourceMappingURL=lib.js.map
