@@ -9,19 +9,18 @@
  * Usage in a hosted MCP endpoint (e.g. Hono, Express, Cloudflare Worker):
  *
  *   import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js'
- *   import { registerShopTools, type HttpOptions } from '@haszno/mcp/lib'
+ *   import { registerShopTools, registerModulesTools, createClient, type HttpOptions } from '@haszno/mcp/lib'
  *
  *   const server = new McpServer({ name: 'my-server', version: '1.0.0' })
+ *   const opts = {
+ *     apiKey:  req.headers['x-haszno-token'],  // per-request credential
+ *     baseUrl: process.env.HASZNO_API_BASE,
+ *     fetch,                                    // supply the runtime's fetch
+ *     noEnvFallback: true,
+ *   }
  *
- *   registerShopTools(
- *     server,
- *     {
- *       apiKey:  req.headers['x-haszno-token'],  // per-request credential
- *       baseUrl: process.env.HASZNO_API_BASE,
- *       fetch,                                    // supply the runtime's fetch
- *     },
- *     { remote: true },  // ← enables remote mode (no filePath, no env fallbacks)
- *   )
+ *   registerShopTools(server, opts, { remote: true })
+ *   registerModulesTools(server, createClient(opts))
  *
  * remote: true guarantees:
  *   - haszno_shop_upload_image accepts only base64+mimeType; filePath is absent
@@ -36,4 +35,7 @@
  */
 export { registerShopTools } from './tools/shop.js'
 export { registerJobTools } from './tools/jobs.js'
+export { registerModulesTools } from './tools/modules.js'
+export { createClient } from './client/index.js'
 export type { HttpOptions } from './client/http.js'
+export type { HasznoClient } from './client/index.js'
