@@ -262,7 +262,7 @@ export function registerBookingTools(server: McpServer, client: HasznoClient): v
       annotations: { readOnlyHint: false, openWorldHint: false },
       inputSchema: {
         id: z.number().int().positive().describe('Service id (from haszno_booking_get_setup or haszno_booking_upsert_service).'),
-        confirm: z.literal(true).describe('Must be exactly true (safety gate).'),
+        confirm: z.literal(true).optional().describe('Must be exactly true (safety gate).'),
       },
     },
     async (args) => {
@@ -335,7 +335,7 @@ export function registerBookingTools(server: McpServer, client: HasznoClient): v
       annotations: { readOnlyHint: false, openWorldHint: false },
       inputSchema: {
         id: z.number().int().positive().describe('Resource id (from haszno_booking_get_setup or haszno_booking_upsert_resource).'),
-        confirm: z.literal(true).describe('Must be exactly true (safety gate).'),
+        confirm: z.literal(true).optional().describe('Must be exactly true (safety gate).'),
       },
     },
     async (args) => {
@@ -434,7 +434,7 @@ export function registerBookingTools(server: McpServer, client: HasznoClient): v
       annotations: { readOnlyHint: false, openWorldHint: false },
       inputSchema: {
         published: z.boolean().describe('true = visible to customers; false = hidden draft.'),
-        confirm: z.literal(true).describe('Must be exactly true (safety gate).'),
+        confirm: z.literal(true).optional().describe('Must be exactly true (safety gate).'),
       },
     },
     async (args) => {

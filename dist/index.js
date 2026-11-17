@@ -4862,7 +4862,7 @@ function registerBookingTools(server, client) {
       annotations: { readOnlyHint: false, openWorldHint: false },
       inputSchema: {
         id: z17.number().int().positive().describe("Service id (from haszno_booking_get_setup or haszno_booking_upsert_service)."),
-        confirm: z17.literal(true).describe("Must be exactly true (safety gate).")
+        confirm: z17.literal(true).optional().describe("Must be exactly true (safety gate).")
       }
     },
     async (args) => {
@@ -4921,7 +4921,7 @@ function registerBookingTools(server, client) {
       annotations: { readOnlyHint: false, openWorldHint: false },
       inputSchema: {
         id: z17.number().int().positive().describe("Resource id (from haszno_booking_get_setup or haszno_booking_upsert_resource)."),
-        confirm: z17.literal(true).describe("Must be exactly true (safety gate).")
+        confirm: z17.literal(true).optional().describe("Must be exactly true (safety gate).")
       }
     },
     async (args) => {
@@ -4986,7 +4986,7 @@ function registerBookingTools(server, client) {
       annotations: { readOnlyHint: false, openWorldHint: false },
       inputSchema: {
         published: z17.boolean().describe("true = visible to customers; false = hidden draft."),
-        confirm: z17.literal(true).describe("Must be exactly true (safety gate).")
+        confirm: z17.literal(true).optional().describe("Must be exactly true (safety gate).")
       }
     },
     async (args) => {
