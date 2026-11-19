@@ -71,6 +71,10 @@ export function registerProductsTools(server: McpServer, client: HasznoClient): 
         ),
       },
       annotations: { readOnlyHint: true, destructiveHint: false },
+      _meta: {
+        ui: { resourceUri: 'ui://haszno/products' },
+        'ui/resourceUri': 'ui://haszno/products',
+      },
     },
     async ({ all }) => {
       try {
