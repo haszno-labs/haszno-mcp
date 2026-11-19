@@ -74,6 +74,9 @@ export function registerOrdersTools(server: McpServer, client: HasznoClient): vo
           .describe('Maximum rows to return (1–50, default 25).'),
       },
       annotations: { readOnlyHint: true },
+      _meta: {
+        ui: { resourceUri: 'ui://haszno/orders' },
+      },
     },
     async ({ status, limit = 25 }) => {
       const all = await client.orders.list()

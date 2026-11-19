@@ -98,6 +98,9 @@ export function registerRulesTools(server: McpServer, client: HasznoClient): voi
         'or check whether automation is configured at all. ' +
         'Read-only — always safe to call.',
       annotations: { readOnlyHint: true },
+      _meta: {
+        ui: { resourceUri: 'ui://haszno/rules' },
+      },
     },
     () => wrap(() => client.rules.list()),
   )

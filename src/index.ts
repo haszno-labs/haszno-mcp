@@ -29,6 +29,7 @@ import { registerOrdersTools } from './tools/orders.js'
 import { registerIdeasTools } from './tools/ideas.js'
 import { registerFeedsTools } from './tools/feeds.js'
 import { registerAccountTools } from './tools/account.js'
+import { registerUiResources } from './ui/register.js'
 import { registerCatalogueTools } from './tools/catalogue.js'
 import { registerConnectionsTools } from './tools/connections.js'
 import { registerPeersTools } from './tools/peers.js'
@@ -173,6 +174,12 @@ async function main() {
   registerShopTools(server, httpOpts)
   registerModulesTools(server, client)
   registerBookingTools(server, client)
+
+  // MCP Apps UI resources — ui://haszno/<domain>
+  // Clients that support MCP Apps (Claude web, ChatGPT, VS Code ≥ 2026-01-26, …)
+  // will render these as interactive iframes.  Clients that do not support MCP Apps
+  // ignore _meta.ui and fall back to the existing text/JSON content in every tool result.
+  registerUiResources(server)
 
   const transport = new StdioServerTransport()
   await server.connect(transport)

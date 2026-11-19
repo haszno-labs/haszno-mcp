@@ -144,6 +144,9 @@ function registerAiShortlistTool(server: McpServer, client: HasznoClient): void 
           .describe('Must be true. Confirms you accept a possible AI API call and its cost.'),
       },
       annotations: { readOnlyHint: false, destructiveHint: false, idempotentHint: false },
+      _meta: {
+        ui: { resourceUri: 'ui://haszno/ideas' },
+      },
     },
     async ({ confirm: _confirm }) => {
       const result = await client.recommendations.getAiShortlist()

@@ -32,6 +32,12 @@ function makeMockServer() {
       const description = typeof rest[0] === 'string' ? (rest[0] as string) : ''
       tools.set(name, { description, handler })
     },
+    registerTool(name: string, config: { description?: string; [k: string]: unknown }, handler: ToolHandler) {
+      // registerTool(name, config, handler) — the new SDK API
+      const description = typeof config.description === 'string' ? config.description : ''
+      tools.set(name, { description, handler })
+    },
+    registerResource() { /* no-op — UI resources not needed in unit tests */ },
   }
 }
 
