@@ -716,8 +716,7 @@ function registerProductsTools(server, client) {
       },
       annotations: { readOnlyHint: true, destructiveHint: false },
       _meta: {
-        ui: { resourceUri: "ui://haszno/products" },
-        "ui/resourceUri": "ui://haszno/products"
+        ui: { resourceUri: "ui://haszno/products" }
       }
     },
     async ({ all }) => {
@@ -881,8 +880,7 @@ Includes a \`_meta\` field with total count hint and pagination cursor.`,
       },
       annotations: { readOnlyHint: true },
       _meta: {
-        ui: { resourceUri: "ui://haszno/proposals" },
-        "ui/resourceUri": "ui://haszno/proposals"
+        ui: { resourceUri: "ui://haszno/proposals" }
       }
     },
     async (args) => {
@@ -1027,8 +1025,7 @@ Workflow:
       },
       annotations: { destructiveHint: false, idempotentHint: false },
       _meta: {
-        ui: { resourceUri: "ui://haszno/proposals" },
-        "ui/resourceUri": "ui://haszno/proposals"
+        ui: { resourceUri: "ui://haszno/proposals" }
       }
     },
     async (args) => {
@@ -1074,8 +1071,7 @@ Returns:
       },
       annotations: { destructiveHint: false, idempotentHint: true },
       _meta: {
-        ui: { resourceUri: "ui://haszno/proposals" },
-        "ui/resourceUri": "ui://haszno/proposals"
+        ui: { resourceUri: "ui://haszno/proposals" }
       }
     },
     async (args) => {
@@ -1241,8 +1237,7 @@ function registerRulesTools(server, client) {
       description: "List all automation rules configured for this shop. Returns each rule's id, name, enabled flag, trigger event, conditions, actions, template key (if created from one), and creation date. Use to audit active automations, find a rule id before running or updating it, or check whether automation is configured at all. Read-only \u2014 always safe to call.",
       annotations: { readOnlyHint: true },
       _meta: {
-        ui: { resourceUri: "ui://haszno/rules" },
-        "ui/resourceUri": "ui://haszno/rules"
+        ui: { resourceUri: "ui://haszno/rules" }
       }
     },
     () => wrap(() => client.rules.list())
@@ -1418,8 +1413,7 @@ function registerOrdersTools(server, client) {
       },
       annotations: { readOnlyHint: true },
       _meta: {
-        ui: { resourceUri: "ui://haszno/orders" },
-        "ui/resourceUri": "ui://haszno/orders"
+        ui: { resourceUri: "ui://haszno/orders" }
       }
     },
     async ({ status, limit = 25 }) => {
@@ -1626,8 +1620,7 @@ function registerAiShortlistTool(server, client) {
       },
       annotations: { readOnlyHint: false, destructiveHint: false, idempotentHint: false },
       _meta: {
-        ui: { resourceUri: "ui://haszno/ideas" },
-        "ui/resourceUri": "ui://haszno/ideas"
+        ui: { resourceUri: "ui://haszno/ideas" }
       }
     },
     async ({ confirm: _confirm }) => {
@@ -2316,7 +2309,7 @@ var MCP_APPS_PROTOCOL_JS = `
     send({jsonrpc:JSONRPC,id:'mcp-init',method:'ui/initialize',params:{
       appInfo:{name:'haszno-ui',version:'1.0.0'},
       appCapabilities:{},
-      protocolVersion:'2025-11-21'
+      protocolVersion:'2025-03-26'
     }});
   }
 
@@ -2669,7 +2662,7 @@ function attachAddHandlers(){
     btn.addEventListener('click',function(){
       var networkId=parseInt(btn.dataset.addNetwork,10);
       setLoading(btn,true);
-      window.__mcpCallTool('haszno_catalogue_import_list_add',{networkProductId:networkId,confirm:true})
+      window.__mcpCallTool('haszno_catalogue_import_list_add',{networkProductIds:[networkId]})
         .then(function(){showMsg('ok','Hozz\xE1adva az importlist\xE1hoz');btn.textContent='\u2713 Hozz\xE1adva';btn.disabled=true;})
         .catch(function(e){setLoading(btn,false);showMsg('err',e.message)});
     });
