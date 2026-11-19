@@ -75,6 +75,20 @@ export * from './types.js'
 export { HasznoApiError } from './error.js'
 export { isShopToken, SHOP_TOKEN_PREFIX } from './http.js'
 
+// ── Booking types ─────────────────────────────────────────────────────────────
+
+/** A booking service item (at minimum has id and name). */
+export interface BookingServiceItem {
+  id: number
+  name: string
+}
+
+/** A booking resource item (at minimum has id and name). */
+export interface BookingResourceItem {
+  id: number
+  name: string
+}
+
 // ── Shop-token-specific types ──────────────────────────────────────────────────
 
 /**
@@ -348,6 +362,44 @@ export interface HasznoClient {
      */
     resume(moduleId: string): Promise<{ moduleId: string; status: string }>
   }
+
+  /**
+   * Booking module configuration — all routes call /api/agent/booking/*.
+   * Require a shop Bearer token (haszno_…). Read methods need read scope; write methods need write scope.
+   * Not available with a legacy API key: all methods throw LegacyKeyNotSupportedError.
+   */
+  booking: {
+    /** GET /api/agent/booking/setup — full config: page, services, resources, hours, checklist, nextStep */
+    getSetup(): Promise<unknown>
+    /** PUT /api/agent/booking/setup — bulk apply; dryRun:true returns change list without writing */
+    applySetup(body: { dryRun?: boolean } & Record<string, unknown>): Promise<unknown>
+    /** PUT /api/agent/booking/theme — partial theme update */
+    setTheme(body: Record<string, unknown>): Promise<unknown>
+    /** GET /api/agent/booking/services — list active services */
+    listServices(): Promise<BookingServiceItem[]>
+    /** POST /api/agent/booking/services — create a service */
+    createService(body: Record<string, unknown>): Promise<BookingServiceItem>
+    /** PATCH /api/agent/booking/services/:id — update a service */
+    updateService(id: number, body: Record<string, unknown>): Promise<BookingServiceItem>
+    /** DELETE /api/agent/booking/services/:id — soft-delete a service */
+    deleteService(id: number): Promise<unknown>
+    /** GET /api/agent/booking/resources — list active resources */
+    listResources(): Promise<BookingResourceItem[]>
+    /** POST /api/agent/booking/resources — create a resource */
+    createResource(body: Record<string, unknown>): Promise<BookingResourceItem>
+    /** PATCH /api/agent/booking/resources/:id — update a resource */
+    updateResource(id: number, body: Record<string, unknown>): Promise<BookingResourceItem>
+    /** DELETE /api/agent/booking/resources/:id — soft-delete a resource */
+    deleteResource(id: number): Promise<unknown>
+    /** PUT /api/agent/booking/hours — replace full weekly schedule */
+    setHours(body: Record<string, unknown>): Promise<unknown>
+    /** POST /api/agent/booking/exceptions — add a date exception / closure */
+    addClosure(body: Record<string, unknown>): Promise<unknown>
+    /** POST /api/agent/booking/publish — publish or unpublish the booking page */
+    publish(body: { published: boolean }): Promise<unknown>
+    /** GET /api/agent/booking/appointments?from=…&to=… — list appointments */
+    listAppointments(params: { from: string; to: string }): Promise<unknown>
+  }
 }
 
 // ── Internal helpers ──────────────────────────────────────────────────────────
@@ -544,6 +596,26 @@ function createShopTokenClient(opts: HttpOptions): HasznoClient {
       activate: (moduleId) => post(`/api/shop/modules/${moduleId}/activate`, null, o),
       cancel: (moduleId) => post(`/api/shop/modules/${moduleId}/cancel`, null, o),
       resume: (moduleId) => post(`/api/shop/modules/${moduleId}/resume`, null, o),
+    },
+
+    // /api/agent/booking/* — booking module; Bearer haszno_… required
+    booking: {
+      getSetup: () => get('/api/agent/booking/setup', o),
+      applySetup: (body) => put('/api/agent/booking/setup', body, o),
+      setTheme: (body) => put('/api/agent/booking/theme', body, o),
+      listServices: () => get('/api/agent/booking/services', o),
+      createService: (body) => post('/api/agent/booking/services', body, o),
+      updateService: (id, body) => patch(`/api/agent/booking/services/${id}`, body, o),
+      deleteService: (id) => del(`/api/agent/booking/services/${id}`, o),
+      listResources: () => get('/api/agent/booking/resources', o),
+      createResource: (body) => post('/api/agent/booking/resources', body, o),
+      updateResource: (id, body) => patch(`/api/agent/booking/resources/${id}`, body, o),
+      deleteResource: (id) => del(`/api/agent/booking/resources/${id}`, o),
+      setHours: (body) => put('/api/agent/booking/hours', body, o),
+      addClosure: (body) => post('/api/agent/booking/exceptions', body, o),
+      publish: (body) => post('/api/agent/booking/publish', body, o),
+      listAppointments: (params) =>
+        get(`/api/agent/booking/appointments?from=${params.from}&to=${params.to}`, o),
     },
   }
 }
@@ -745,6 +817,26 @@ function createLegacyClient(opts: HttpOptions): HasznoClient {
       activate: (moduleId) => post(`/api/shop/modules/${moduleId}/activate`, null, o),
       cancel: (moduleId) => post(`/api/shop/modules/${moduleId}/cancel`, null, o),
       resume: (moduleId) => post(`/api/shop/modules/${moduleId}/resume`, null, o),
+    },
+
+    // booking.* requires a shop token (haszno_…). All /api/agent/booking/* routes
+    // use requireBearerToken and do not accept x-api-key or Basic credentials.
+    booking: {
+      getSetup: notSupportedLegacy('booking.getSetup'),
+      applySetup: notSupportedLegacy('booking.applySetup'),
+      setTheme: notSupportedLegacy('booking.setTheme'),
+      listServices: notSupportedLegacy('booking.listServices'),
+      createService: notSupportedLegacy('booking.createService'),
+      updateService: notSupportedLegacy('booking.updateService'),
+      deleteService: notSupportedLegacy('booking.deleteService'),
+      listResources: notSupportedLegacy('booking.listResources'),
+      createResource: notSupportedLegacy('booking.createResource'),
+      updateResource: notSupportedLegacy('booking.updateResource'),
+      deleteResource: notSupportedLegacy('booking.deleteResource'),
+      setHours: notSupportedLegacy('booking.setHours'),
+      addClosure: notSupportedLegacy('booking.addClosure'),
+      publish: notSupportedLegacy('booking.publish'),
+      listAppointments: notSupportedLegacy('booking.listAppointments'),
     },
   }
 }
