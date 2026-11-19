@@ -146,7 +146,6 @@ function registerAiShortlistTool(server: McpServer, client: HasznoClient): void 
       annotations: { readOnlyHint: false, destructiveHint: false, idempotentHint: false },
       _meta: {
         ui: { resourceUri: 'ui://haszno/ideas' },
-        'ui/resourceUri': 'ui://haszno/ideas',
       },
     },
     async ({ confirm: _confirm }) => {

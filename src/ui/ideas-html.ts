@@ -77,7 +77,7 @@ function attachAddHandlers(){
     btn.addEventListener('click',function(){
       var networkId=parseInt(btn.dataset.addNetwork,10);
       setLoading(btn,true);
-      window.__mcpCallTool('haszno_catalogue_import_list_add',{networkProductId:networkId,confirm:true})
+      window.__mcpCallTool('haszno_catalogue_import_list_add',{networkProductIds:[networkId]})
         .then(function(){showMsg('ok','Hozzáadva az importlistához');btn.textContent='✓ Hozzáadva';btn.disabled=true;})
         .catch(function(e){setLoading(btn,false);showMsg('err',e.message)});
     });

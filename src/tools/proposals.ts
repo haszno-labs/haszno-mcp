@@ -98,7 +98,6 @@ Includes a \`_meta\` field with total count hint and pagination cursor.`,
       annotations: { readOnlyHint: true },
       _meta: {
         ui: { resourceUri: 'ui://haszno/proposals' },
-        'ui/resourceUri': 'ui://haszno/proposals',
       },
     },
     async (args) => {
@@ -271,7 +270,6 @@ Workflow:
       annotations: { destructiveHint: false, idempotentHint: false },
       _meta: {
         ui: { resourceUri: 'ui://haszno/proposals' },
-        'ui/resourceUri': 'ui://haszno/proposals',
       },
     },
     async (args) => {
@@ -329,7 +327,6 @@ Returns:
       annotations: { destructiveHint: false, idempotentHint: true },
       _meta: {
         ui: { resourceUri: 'ui://haszno/proposals' },
-        'ui/resourceUri': 'ui://haszno/proposals',
       },
     },
     async (args) => {

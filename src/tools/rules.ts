@@ -100,7 +100,6 @@ export function registerRulesTools(server: McpServer, client: HasznoClient): voi
       annotations: { readOnlyHint: true },
       _meta: {
         ui: { resourceUri: 'ui://haszno/rules' },
-        'ui/resourceUri': 'ui://haszno/rules',
       },
     },
     () => wrap(() => client.rules.list()),

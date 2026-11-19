@@ -99,7 +99,7 @@ export const MCP_APPS_PROTOCOL_JS = `
     send({jsonrpc:JSONRPC,id:'mcp-init',method:'ui/initialize',params:{
       appInfo:{name:'haszno-ui',version:'1.0.0'},
       appCapabilities:{},
-      protocolVersion:'2025-11-21'
+      protocolVersion:'2025-03-26'
     }});
   }
 
